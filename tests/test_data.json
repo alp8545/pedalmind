@@ -1,0 +1,26 @@
+{
+  "athlete_profile": {
+    "athlete_id": "test-001", "name": "Test Athlete", "ftp_watts": 265, "max_hr": 192,
+    "resting_hr": 57, "weight_kg": 68, "target_ftp_watts": 300, "target_weight_kg": 64,
+    "weekly_hours_budget": 8, "power_meter_type": "left_only",
+    "goals_text": "FTP da 265W a 300W, peso da 68 a 64kg",
+    "preferred_language": "it"
+  },
+  "sample_ride": {
+    "version": "1.0", "ride_id": "test-ride-001", "athlete_id": "test-001",
+    "timestamp": "2026-03-05T07:30:00Z",
+    "summary": {
+      "duration_sec": 4200, "distance_km": 32.5, "elevation_gain_m": 280,
+      "avg_power_w": 178, "normalized_power_w": 204, "max_power_w": 520,
+      "intensity_factor": 0.77, "training_stress_score": 59,
+      "avg_hr": 145, "max_hr": 178, "avg_cadence": 88
+    },
+    "power_curve": { "best_5s": 520, "best_1min": 290, "best_5min": 240, "best_20min": 207 },
+    "zones": { "power_zones": { "z1_recovery": 1200, "z2_endurance": 1500, "z3_tempo": 600, "z4_threshold": 300, "z5_vo2max": 120, "z6_anaerobic": 160, "z7_neuromuscular": 40 } },
+    "intervals": [
+      {"start_sec": 900, "duration_sec": 20, "avg_power_w": 375, "max_power_w": 420, "avg_hr": 168, "avg_cadence": 104, "zone": "Z6"},
+      {"start_sec": 1080, "duration_sec": 20, "avg_power_w": 380, "max_power_w": 430, "avg_hr": 170, "avg_cadence": 106, "zone": "Z6"}
+    ],
+    "cardiac_decoupling_pct": 2.5
+  }
+}

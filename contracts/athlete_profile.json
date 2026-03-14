@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AthleteProfile",
+  "description": "Athlete configuration. Replaces all hard-coded values.",
+  "type": "object",
+  "required": ["athlete_id", "name", "ftp_watts", "max_hr", "weight_kg"],
+  "properties": {
+    "athlete_id": { "type": "string" },
+    "name": { "type": "string" },
+    "ftp_watts": { "type": "integer", "minimum": 50, "maximum": 500 },
+    "max_hr": { "type": "integer", "minimum": 120, "maximum": 230 },
+    "resting_hr": { "type": ["integer", "null"] },
+    "weight_kg": { "type": "number", "minimum": 35, "maximum": 150 },
+    "target_ftp_watts": { "type": ["integer", "null"] },
+    "target_weight_kg": { "type": ["number", "null"] },
+    "weekly_hours_budget": { "type": ["number", "null"] },
+    "power_meter_type": { "type": ["string", "null"], "enum": ["dual", "left_only", "right_only", "spider", "hub", "pedals", null] },
+    "goals_text": { "type": ["string", "null"] },
+    "preferred_language": { "type": "string", "enum": ["en", "it", "de", "es", "fr"], "default": "en" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

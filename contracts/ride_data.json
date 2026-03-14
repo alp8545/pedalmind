@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RideData",
+  "description": "Processed ride data from .FIT file. Produced by garmin_sync, consumed by ai_engine and frontend.",
+  "type": "object",
+  "required": ["version", "ride_id", "athlete_id", "timestamp", "summary", "zones"],
+  "properties": {
+    "version": { "const": "1.0" },
+    "ride_id": { "type": "string" },
+    "athlete_id": { "type": "string" },
+    "garmin_activity_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "summary": {
+      "type": "object",
+      "required": ["duration_sec", "distance_km"],
+      "properties": {
+        "duration_sec": { "type": "integer" },
+        "distance_km": { "type": "number" },
+        "elevation_gain_m": { "type": "integer" },
+        "avg_power_w": { "type": ["integer", "null"] },
+        "normalized_power_w": { "type": ["integer", "null"] },
+        "max_power_w": { "type": ["integer", "null"] },
+        "intensity_factor": { "type": ["number", "null"] },
+        "training_stress_score": { "type": ["number", "null"] },
+        "avg_hr": { "type": ["integer", "null"] },
+        "max_hr": { "type": ["integer", "null"] },
+        "avg_cadence": { "type": ["integer", "null"] }
+      }
+    },
+    "power_curve": {
+      "type": "object",
+      "properties": {
+        "best_5s": { "type": ["integer", "null"] },
+        "best_1min": { "type": ["integer", "null"] },
+        "best_5min": { "type": ["integer", "null"] },
+        "best_20min": { "type": ["integer", "null"] },
+        "best_60min": { "type": ["integer", "null"] }
+      }
+    },
+    "zones": {
+      "type": "object",
+      "properties": {
+        "power_zones": { "type": ["object", "null"] },
+        "hr_zones": { "type": ["object", "null"] }
+      }
+    },
+    "intervals": { "type": "array" },
+    "cardiac_decoupling_pct": { "type": ["number", "null"] }
+  }
+}

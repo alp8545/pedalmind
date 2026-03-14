@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RideAnalysis",
+  "description": "AI-generated ride analysis. Produced by ai_engine, consumed by frontend.",
+  "type": "object",
+  "required": ["version", "ride_id", "model_used", "generated_at", "summary_text", "sections"],
+  "properties": {
+    "version": { "const": "1.0" },
+    "ride_id": { "type": "string" },
+    "model_used": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "tokens_input": { "type": "integer" },
+    "tokens_output": { "type": "integer" },
+    "ride_type_detected": { "type": "string", "enum": ["endurance", "tempo", "threshold", "vo2max_intervals", "sprint_intervals", "mixed", "race", "recovery", "group_ride", "commute"] },
+    "summary_text": { "type": "string", "maxLength": 300 },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "content"],
+        "properties": {
+          "title": { "type": "string" },
+          "content": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "scores": {
+      "type": "object",
+      "properties": {
+        "overall": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "execution": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "aerobic_development": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "intensity_quality": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "enum": ["warning", "positive", "info"] },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}

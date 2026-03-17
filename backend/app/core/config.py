@@ -1,4 +1,6 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://pedalmind:pedalmind@localhost:5432/pedalmind"
@@ -19,7 +21,18 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 1440
     FRONTEND_URL: str = "http://localhost:5173"
 
+    @model_validator(mode="after")
+    def fix_database_url(self):
+        """Railway injects DATABASE_URL as postgresql:// but asyncpg needs postgresql+asyncpg://"""
+        url = self.DATABASE_URL
+        if url.startswith("postgresql://"):
+            self.DATABASE_URL = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
+            self.DATABASE_URL = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        return self
+
     class Config:
         env_file = ".env"
+
 
 settings = Settings()

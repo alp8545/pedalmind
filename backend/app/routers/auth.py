@@ -68,11 +68,3 @@ async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-@router.get("/garmin/connect")
-async def garmin_connect():
-    return {"message": "not implemented"}
-
-
-@router.get("/garmin/callback")
-async def garmin_callback():
-    return {"message": "not implemented"}

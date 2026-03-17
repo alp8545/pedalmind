@@ -1,8 +1,9 @@
 """Garmin Connect sync endpoints.
 
-Downloads activities from Garmin, parses .FIT files into RideData,
-and stores them in the DB. Skips AI analysis for speed — user can
-reanalyze individual rides later via POST /api/rides/:id/reanalyze.
+Downloads activities from Garmin using the user's OAuth tokens,
+parses .FIT files into RideData, and stores them in the DB.
+Skips AI analysis for speed — user can reanalyze individual rides
+later via POST /api/rides/:id/reanalyze.
 """
 
 import logging
@@ -13,9 +14,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
-from app.core.garmin_client import download_fit, get_activities, get_latest_activity
+from app.core.encryption import decrypt_token
+from app.core.garmin_client import (
+    download_fit_oauth,
+    get_activities_oauth,
+    get_latest_activity_oauth,
+)
 from app.core.security import get_current_user
 from app.models.database import AthleteProfile, Ride, User
 
@@ -29,6 +34,19 @@ class SyncResult(BaseModel):
     skipped: int
     failed: int
     rides: list[str]  # list of ride IDs that were imported
+
+
+def _get_user_garmin_tokens(user: User) -> tuple[str, str]:
+    """Decrypt and return the user's Garmin OAuth tokens, or raise 400."""
+    if not user.garmin_access_token_enc or not user.garmin_access_token_secret_enc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please connect your Garmin account first",
+        )
+    return (
+        decrypt_token(user.garmin_access_token_enc),
+        decrypt_token(user.garmin_access_token_secret_enc),
+    )
 
 
 async def _get_profile_defaults(user: User, db: AsyncSession) -> dict:
@@ -48,7 +66,7 @@ async def _get_profile_defaults(user: User, db: AsyncSession) -> dict:
 
 
 async def _import_activities(
-    client,
+    session,
     activities: list[dict],
     user: User,
     db: AsyncSession,
@@ -62,7 +80,7 @@ async def _import_activities(
     failed = 0
 
     for activity in activities:
-        aid = str(activity["activityId"])
+        aid = str(activity.get("activityId") or activity.get("summaryId", ""))
 
         # Check for duplicate
         existing = await db.execute(
@@ -76,7 +94,7 @@ async def _import_activities(
             continue
 
         # Download .FIT file
-        fit_path = download_fit(client, activity)
+        fit_path = download_fit_oauth(session, activity)
         if fit_path is None:
             failed += 1
             continue
@@ -130,18 +148,6 @@ async def _import_activities(
     )
 
 
-def _get_garmin_credentials() -> tuple[str, str]:
-    """Get Garmin email/password from settings."""
-    email = settings.GARMIN_EMAIL
-    password = settings.GARMIN_PASSWORD
-    if not email or not password:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Garmin credentials not configured. Set GARMIN_EMAIL and GARMIN_PASSWORD in .env",
-        )
-    return email, password
-
-
 @router.post("/recent", response_model=SyncResult)
 async def sync_recent(
     weeks: int = Query(default=3, ge=1, le=12),
@@ -149,19 +155,19 @@ async def sync_recent(
     db: AsyncSession = Depends(get_db),
 ):
     """Sync activities from the last N weeks from Garmin Connect."""
-    email, password = _get_garmin_credentials()
+    access_token, access_token_secret = _get_user_garmin_tokens(current_user)
     days = weeks * 7
 
     try:
-        client, activities = get_activities(email, password, days=days)
+        session, activities = get_activities_oauth(access_token, access_token_secret, days=days)
     except Exception as e:
-        logger.exception("Garmin login/fetch failed")
+        logger.exception("Garmin API call failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Garmin Connect error: {e}",
         )
 
-    return await _import_activities(client, activities, current_user, db)
+    return await _import_activities(session, activities, current_user, db)
 
 
 @router.post("/latest", response_model=SyncResult)
@@ -170,18 +176,18 @@ async def sync_latest(
     db: AsyncSession = Depends(get_db),
 ):
     """Sync only the most recent activity from Garmin Connect."""
-    email, password = _get_garmin_credentials()
+    access_token, access_token_secret = _get_user_garmin_tokens(current_user)
 
     try:
-        client, activities = get_latest_activity(email, password)
+        session, activities = get_latest_activity_oauth(access_token, access_token_secret)
     except Exception as e:
-        logger.exception("Garmin login/fetch failed")
+        logger.exception("Garmin API call failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Garmin Connect error: {e}",
         )
 
-    return await _import_activities(client, activities, current_user, db)
+    return await _import_activities(session, activities, current_user, db)
 
 
 @router.get("/status")
@@ -197,7 +203,11 @@ async def sync_status(
         .limit(1)
     )
     last_ride = result.scalar_one_or_none()
+    garmin_connected = (
+        current_user.garmin_access_token_enc is not None
+        and current_user.garmin_access_token_secret_enc is not None
+    )
     return {
         "last_sync": last_ride.created_at.isoformat() if last_ride else None,
-        "garmin_configured": bool(settings.GARMIN_EMAIL and settings.GARMIN_PASSWORD),
+        "garmin_connected": garmin_connected,
     }

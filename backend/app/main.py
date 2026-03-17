@@ -38,13 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.routers import auth, profile, rides, chat, sync  # noqa: E402
+from app.routers import auth, profile, rides, chat, sync, garmin_oauth  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(profile.router, prefix="/api/profile", tags=["profile"])
 app.include_router(rides.router, prefix="/api/rides", tags=["rides"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(sync.router, prefix="/api/sync", tags=["sync"])
+app.include_router(garmin_oauth.router, prefix="/api/garmin", tags=["garmin"])
 
 
 @app.get("/api/health")

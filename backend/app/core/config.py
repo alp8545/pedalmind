@@ -4,11 +4,10 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://pedalmind:pedalmind@localhost:5432/pedalmind"
-    GARMIN_EMAIL: str = ""
-    GARMIN_PASSWORD: str = ""
-    GARMIN_CLIENT_ID: str = ""
-    GARMIN_CLIENT_SECRET: str = ""
-    GARMIN_REDIRECT_URI: str = "http://localhost:8000/api/auth/garmin/callback"
+    GARMIN_CONSUMER_KEY: str = ""
+    GARMIN_CONSUMER_SECRET: str = ""
+    GARMIN_ENCRYPTION_KEY: str = ""  # Fernet key for encrypting OAuth tokens at rest
+    APP_BASE_URL: str = "http://localhost:8000"
     ANTHROPIC_API_KEY: str = ""
     AI_MODEL_ANALYSIS: str = "claude-haiku-4-5-20251001"
     AI_MODEL_CHAT: str = "claude-sonnet-4-6"

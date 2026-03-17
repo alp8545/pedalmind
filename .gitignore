@@ -1,9 +1,13 @@
 __pycache__/
 *.pyc
 .env
+!.env.production
+!.env.example
 venv/
 .venv/
 node_modules/
+dist/
 *.fit
 *.FIT
 .DS_Store
+.vercel

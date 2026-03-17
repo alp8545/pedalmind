@@ -5,7 +5,28 @@ RULES:
 3. Be specific and actionable.
 4. Adapt language to preferred_language.
 5. If power_meter_type is left_only, note power values are left leg doubled.
-Return valid JSON matching RideAnalysis contract. No markdown."""
+
+Return ONLY valid JSON (no markdown) with EXACTLY this structure:
+{
+  "summary_text": "1-2 sentence overall ride summary (max 300 chars)",
+  "ride_type_detected": "endurance|tempo|threshold|vo2max_intervals|sprint_intervals|mixed|race|recovery|group_ride|commute",
+  "sections": [
+    {"title": "Power Analysis", "content": "analysis text (max 500 chars)"},
+    {"title": "Heart Rate", "content": "..."},
+    {"title": "Pacing & Fatigue", "content": "..."},
+    {"title": "Recommendations", "content": "..."}
+  ],
+  "scores": {
+    "overall": 7,
+    "execution": 8,
+    "aerobic_development": 6,
+    "intensity_quality": 7
+  },
+  "flags": [
+    {"type": "positive|warning|info", "message": "short flag message"}
+  ]
+}
+Use 3-5 sections. Scores are 1-10. Include 1-4 flags."""
 
 RIDE_ANALYSIS_USER = """Analyze this ride.
 ## Athlete Profile

@@ -2,6 +2,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://pedalmind:pedalmind@localhost:5432/pedalmind"
+    GARMIN_EMAIL: str = ""
+    GARMIN_PASSWORD: str = ""
     GARMIN_CLIENT_ID: str = ""
     GARMIN_CLIENT_SECRET: str = ""
     GARMIN_REDIRECT_URI: str = "http://localhost:8000/api/auth/garmin/callback"

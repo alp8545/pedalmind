@@ -24,27 +24,7 @@
         "training_stress_score": { "type": ["number", "null"] },
         "avg_hr": { "type": ["integer", "null"] },
         "max_hr": { "type": ["integer", "null"] },
-        "avg_cadence": { "type": ["integer", "null"] }
-      }
-    },
-    "power_curve": {
-      "type": "object",
-      "properties": {
-        "best_5s": { "type": ["integer", "null"] },
-        "best_1min": { "type": ["integer", "null"] },
-        "best_5min": { "type": ["integer", "null"] },
-        "best_20min": { "type": ["integer", "null"] },
-        "best_60min": { "type": ["integer", "null"] }
-      }
-    },
-    "zones": {
-      "type": "object",
-      "properties": {
-        "power_zones": { "type": ["object", "null"] },
-        "hr_zones": { "type": ["object", "null"] }
-      }
-    },
-    "intervals": { "type": "array" },
-    "cardiac_decoupling_pct": { "type": ["number", "null"] }
-  }
-}
+        "avg​​​​​​​​​​​​​​​​
+
+
+quit

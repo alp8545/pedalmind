@@ -28,12 +28,19 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: network-first for API, stale-while-revalidate for everything else
+// Fetch handler
 self.addEventListener('fetch', (event) => {
   const { request } = event;
+
+  // Only handle GET requests — let POST/PUT/DELETE pass through
+  if (request.method !== 'GET') return;
+
   const url = new URL(request.url);
 
-  // Network-first for API calls
+  // Skip cross-origin requests (API is on Railway, chrome-extension, etc.)
+  if (url.origin !== self.location.origin) return;
+
+  // Network-first for same-origin /api/ calls (e.g. dev proxy)
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(request)
@@ -42,7 +49,9 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           return response;
         })
-        .catch(() => caches.match(request))
+        .catch(() =>
+          caches.match(request).then((cached) => cached || Response.error())
+        )
     );
     return;
   }
@@ -50,11 +59,16 @@ self.addEventListener('fetch', (event) => {
   // Stale-while-revalidate for static assets
   event.respondWith(
     caches.match(request).then((cached) => {
-      const fetchPromise = fetch(request).then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        return response;
-      });
+      const fetchPromise = fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => cached);
+
       return cached || fetchPromise;
     })
   );

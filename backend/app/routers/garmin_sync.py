@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.garth_client import fetch_activities, fetch_activity_details, GarminRateLimitError
+from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError
 from app.models.database import Activity
 
 logger = logging.getLogger(__name__)
@@ -151,50 +151,14 @@ def _generate_analysis(activity: Activity) -> str:
 
 
 @router.get("/debug")
-async def debug_garth():
-    """Temporary debug endpoint — check garth token state."""
-    import garth
+async def garmin_debug():
+    """Debug endpoint: show garth token bootstrap status and filesystem state."""
+    result = get_bootstrap_debug()
 
-    result = {}
-
-    # 1. GARTH_TOKENS env var
-    garth_tokens_env = os.environ.get("GARTH_TOKENS")
+    # Also show env var preview
+    garth_tokens_env = os.environ.get("GARTH_TOKENS", "")
     if garth_tokens_env:
-        result["GARTH_TOKENS_env"] = f"set, first 50 chars: {garth_tokens_env[:50]}"
-    else:
-        result["GARTH_TOKENS_env"] = "not set"
-
-    # 2. Token files in /tmp/garth_tokens/
-    token_dir = Path("/tmp/garth_tokens")
-    if token_dir.exists():
-        files = list(token_dir.iterdir())
-        result["token_dir"] = {
-            "path": str(token_dir),
-            "files": [f.name for f in files],
-        }
-    else:
-        result["token_dir"] = {"path": str(token_dir), "exists": False}
-
-    # Also check ~/.garth/ (current _TOKEN_DIR)
-    home_garth = Path.home() / ".garth"
-    if home_garth.exists():
-        files = list(home_garth.iterdir())
-        result["home_garth_dir"] = {
-            "path": str(home_garth),
-            "files": [f.name for f in files],
-        }
-    else:
-        result["home_garth_dir"] = {"path": str(home_garth), "exists": False}
-
-    # 3. Try garth.resume()
-    for dir_path in [str(token_dir), str(home_garth)]:
-        key = f"resume_{Path(dir_path).name}"
-        try:
-            garth.resume(dir_path)
-            result[key] = "success"
-        except Exception as e:
-            result[key] = f"error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
-
+        result["garth_tokens_env_preview"] = garth_tokens_env[:50] + "..."
     return result
 
 

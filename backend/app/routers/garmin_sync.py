@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.garth_client import fetch_activities, fetch_activity_details
+from app.core.garth_client import fetch_activities, fetch_activity_details, GarminRateLimitError
 from app.models.database import Activity
 
 logger = logging.getLogger(__name__)
@@ -152,6 +152,12 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
     """Download the latest activity from Garmin and save to DB."""
     try:
         activities = await asyncio.to_thread(fetch_activities, days=3, limit=5)
+    except GarminRateLimitError:
+        logger.warning("Garmin rate limit on sync/last")
+        raise HTTPException(
+            status_code=429,
+            detail="Garmin è temporaneamente sovraccarico, riprova tra qualche minuto",
+        )
     except Exception as e:
         logger.exception("Garmin garth connection failed")
         raise HTTPException(status_code=502, detail=f"Errore connessione Garmin: {e}")
@@ -188,6 +194,12 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
 
     try:
         activities = await asyncio.to_thread(fetch_activities, days=days, limit=100)
+    except GarminRateLimitError:
+        logger.warning("Garmin rate limit on sync/weeks/%d", weeks)
+        raise HTTPException(
+            status_code=429,
+            detail="Garmin è temporaneamente sovraccarico, riprova tra qualche minuto",
+        )
     except Exception as e:
         logger.exception("Garmin garth connection failed")
         raise HTTPException(status_code=502, detail=f"Errore connessione Garmin: {e}")

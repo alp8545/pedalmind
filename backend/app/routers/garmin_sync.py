@@ -7,7 +7,10 @@ activities table. No OAuth required — uses GARMIN_EMAIL/PASSWORD env vars.
 
 import asyncio
 import logging
+import os
+import traceback
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -145,6 +148,54 @@ def _generate_analysis(activity: Activity) -> str:
 
 
 # ---- Endpoints ----
+
+
+@router.get("/debug")
+async def debug_garth():
+    """Temporary debug endpoint — check garth token state."""
+    import garth
+
+    result = {}
+
+    # 1. GARTH_TOKENS env var
+    garth_tokens_env = os.environ.get("GARTH_TOKENS")
+    if garth_tokens_env:
+        result["GARTH_TOKENS_env"] = f"set, first 50 chars: {garth_tokens_env[:50]}"
+    else:
+        result["GARTH_TOKENS_env"] = "not set"
+
+    # 2. Token files in /tmp/garth_tokens/
+    token_dir = Path("/tmp/garth_tokens")
+    if token_dir.exists():
+        files = list(token_dir.iterdir())
+        result["token_dir"] = {
+            "path": str(token_dir),
+            "files": [f.name for f in files],
+        }
+    else:
+        result["token_dir"] = {"path": str(token_dir), "exists": False}
+
+    # Also check ~/.garth/ (current _TOKEN_DIR)
+    home_garth = Path.home() / ".garth"
+    if home_garth.exists():
+        files = list(home_garth.iterdir())
+        result["home_garth_dir"] = {
+            "path": str(home_garth),
+            "files": [f.name for f in files],
+        }
+    else:
+        result["home_garth_dir"] = {"path": str(home_garth), "exists": False}
+
+    # 3. Try garth.resume()
+    for dir_path in [str(token_dir), str(home_garth)]:
+        key = f"resume_{Path(dir_path).name}"
+        try:
+            garth.resume(dir_path)
+            result[key] = "success"
+        except Exception as e:
+            result[key] = f"error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+
+    return result
 
 
 @router.post("/sync/last")

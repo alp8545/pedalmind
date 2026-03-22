@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     GARMIN_ENCRYPTION_KEY: str = ""  # Fernet key for encrypting OAuth tokens at rest
     GARMIN_EMAIL: str = ""  # Email for garth-based sync (single user)
     GARMIN_PASSWORD: str = ""  # Password for garth-based sync (single user)
+    GARTH_TOKENS: str = ""  # base64-encoded garth token bundle for Railway
     APP_BASE_URL: str = "http://localhost:8000"
     ANTHROPIC_API_KEY: str = ""
     AI_MODEL_ANALYSIS: str = "claude-haiku-4-5-20251001"

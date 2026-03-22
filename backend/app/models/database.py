@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Boolean, String, Integer, Float, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -66,6 +66,44 @@ class RideAnalysis(Base):
     tokens_output: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ride: Mapped["Ride"] = relationship(back_populates="analysis")
+
+class Activity(Base):
+    """Garmin activity synced via garth (email/password).
+
+    Stores both computed metrics and the full raw JSON from Garmin Connect API.
+    """
+    __tablename__ = "activities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)  # Garmin activity ID
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sport: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_secs: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Key metrics
+    avg_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_hr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    avg_power: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_power: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    normalized_power: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intensity_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_cadence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    calories: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    elevation_gain: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_speed: Mapped[float | None] = mapped_column(Float, nullable=True)  # m/s
+
+    # Full JSON data for deep analysis
+    raw_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    splits_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Analysis
+    analyzed: Mapped[bool] = mapped_column(default=False)
+    analysis_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 
 class ChatConversation(Base):
     __tablename__ = "chat_conversations"

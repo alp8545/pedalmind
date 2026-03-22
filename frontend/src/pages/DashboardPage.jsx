@@ -35,6 +35,12 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const perPage = 20
 
+  // Garmin garth sync state
+  const [garminActivities, setGarminActivities] = useState([])
+  const [garminLoading, setGarminLoading] = useState(false)
+  const [garminSyncing, setGarminSyncing] = useState(false)
+  const [analyzing, setAnalyzing] = useState(null)
+
   const fetchRides = () => {
     setLoading(true)
     api(`/api/rides?page=${page}&per_page=${perPage}`)
@@ -43,7 +49,16 @@ export default function DashboardPage() {
       .finally(() => setLoading(false))
   }
 
+  const fetchGarminActivities = () => {
+    setGarminLoading(true)
+    api('/api/garmin/activities')
+      .then(data => setGarminActivities(data))
+      .catch(() => {})
+      .finally(() => setGarminLoading(false))
+  }
+
   useEffect(() => { fetchRides() }, [page])
+  useEffect(() => { fetchGarminActivities() }, [])
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
@@ -73,6 +88,40 @@ export default function DashboardPage() {
     }
   }
 
+  const handleGarminSync = async (endpoint) => {
+    setGarminSyncing(true)
+    try {
+      const result = await api(endpoint, { method: 'POST' })
+      if (result.skipped) {
+        showToast('Attivita gia scaricata')
+      } else if (result.synced !== undefined) {
+        showToast(`${result.synced} attivita scaricate, ${result.skipped} gia presenti`)
+      } else if (result.metrics) {
+        const name = result.metrics.name || 'Activity'
+        const tss = result.metrics.tss ? ` — TSS: ${result.metrics.tss}` : ''
+        showToast(`${name} scaricata${tss}`)
+      }
+      fetchGarminActivities()
+    } catch (err) {
+      showToast(err.message || 'Errore sync Garmin', 'error')
+    } finally {
+      setGarminSyncing(false)
+    }
+  }
+
+  const handleAnalyze = async (activityId) => {
+    setAnalyzing(activityId)
+    try {
+      const result = await api(`/api/garmin/activities/${activityId}/analyze`, { method: 'POST' })
+      showToast('Analisi completata')
+      fetchGarminActivities()
+    } catch (err) {
+      showToast(err.message || 'Errore analisi', 'error')
+    } finally {
+      setAnalyzing(null)
+    }
+  }
+
   const totalPages = Math.ceil(total / perPage)
 
   return (
@@ -85,6 +134,125 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Garmin Direct Sync (garth) */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold text-white">Garmin Activities</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleGarminSync('/api/garmin/sync/last')}
+              disabled={garminSyncing}
+              className="px-3 py-1.5 rounded-lg text-sm bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {garminSyncing ? <Spinner /> : null}
+              Scarica ultima uscita
+            </button>
+            <button
+              onClick={() => handleGarminSync('/api/garmin/sync/weeks/3')}
+              disabled={garminSyncing}
+              className="px-3 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {garminSyncing ? <Spinner /> : null}
+              Scarica ultime 3 settimane
+            </button>
+          </div>
+        </div>
+
+        {garminLoading ? (
+          <div className="text-slate-500 text-center py-8">Loading Garmin activities...</div>
+        ) : garminActivities.length === 0 ? (
+          <div className="text-center py-8 bg-slate-900 rounded-xl border border-slate-800">
+            <p className="text-slate-500 mb-1">Nessuna attivita Garmin</p>
+            <p className="text-sm text-slate-600">Premi &quot;Scarica ultima uscita&quot; per iniziare</p>
+          </div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-500 text-left">
+                    <th className="px-4 py-3 font-medium">Date</th>
+                    <th className="px-4 py-3 font-medium">Name</th>
+                    <th className="px-4 py-3 font-medium">Distance</th>
+                    <th className="px-4 py-3 font-medium">Duration</th>
+                    <th className="px-4 py-3 font-medium">NP</th>
+                    <th className="px-4 py-3 font-medium">TSS</th>
+                    <th className="px-4 py-3 font-medium">IF</th>
+                    <th className="px-4 py-3 font-medium">Avg HR</th>
+                    <th className="px-4 py-3 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {garminActivities.map(a => (
+                    <tr key={a.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                      <td className="px-4 py-3 text-slate-300">
+                        {a.start_time ? new Date(a.start_time).toLocaleDateString() : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-white font-medium">{a.name}</td>
+                      <td className="px-4 py-3 text-slate-300">
+                        {a.distance_m ? (a.distance_m / 1000).toFixed(1) : '-'} km
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">
+                        {a.duration_secs ? `${Math.floor(a.duration_secs / 3600)}h${String(Math.floor((a.duration_secs % 3600) / 60)).padStart(2, '0')}m` : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">{a.normalized_power ?? '-'}</td>
+                      <td className="px-4 py-3 text-slate-300">{a.tss ? Math.round(a.tss) : '-'}</td>
+                      <td className="px-4 py-3 text-slate-300">{a.intensity_factor?.toFixed(2) ?? '-'}</td>
+                      <td className="px-4 py-3 text-slate-300">{a.avg_hr ?? '-'}</td>
+                      <td className="px-4 py-3">
+                        {a.analyzed ? (
+                          <span className="text-xs text-green-400">Analyzed</span>
+                        ) : (
+                          <button
+                            onClick={() => handleAnalyze(a.id)}
+                            disabled={analyzing === a.id}
+                            className="px-2 py-1 rounded text-xs bg-sky-600/20 text-sky-400 hover:bg-sky-600/40 disabled:opacity-50"
+                          >
+                            {analyzing === a.id ? 'Analyzing...' : 'Analyze'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden space-y-3">
+              {garminActivities.map(a => (
+                <div key={a.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-white font-medium">{a.name}</span>
+                    <span className="text-xs text-slate-500">
+                      {a.start_time ? new Date(a.start_time).toLocaleDateString() : ''}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm mb-3">
+                    <div><span className="text-slate-500">Dist</span><br /><span className="text-slate-300">{a.distance_m ? (a.distance_m / 1000).toFixed(1) : '-'} km</span></div>
+                    <div><span className="text-slate-500">NP</span><br /><span className="text-slate-300">{a.normalized_power ?? '-'}W</span></div>
+                    <div><span className="text-slate-500">TSS</span><br /><span className="text-slate-300">{a.tss ? Math.round(a.tss) : '-'}</span></div>
+                  </div>
+                  {a.analyzed ? (
+                    <span className="text-xs text-green-400">Analyzed</span>
+                  ) : (
+                    <button
+                      onClick={() => handleAnalyze(a.id)}
+                      disabled={analyzing === a.id}
+                      className="px-3 py-1.5 rounded-lg text-xs bg-sky-600/20 text-sky-400 hover:bg-sky-600/40 disabled:opacity-50 w-full"
+                    >
+                      {analyzing === a.id ? 'Analyzing...' : 'Analyze'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Existing Rides (OAuth sync + uploads) */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-white">Rides</h1>
         <div className="flex items-center gap-2">

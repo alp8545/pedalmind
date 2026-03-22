@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { api } from '../api'
 
 const POWER_METER_TYPES = [
@@ -25,12 +24,6 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [searchParams, setSearchParams] = useSearchParams()
-
-  // Garmin connection state
-  const [garminConnected, setGarminConnected] = useState(false)
-  const [garminLoading, setGarminLoading] = useState(true)
-  const [garminMessage, setGarminMessage] = useState(null)
 
   useEffect(() => {
     api('/api/profile')
@@ -50,24 +43,6 @@ export default function SettingsPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-
-    // Check Garmin connection status
-    api('/api/garmin/status')
-      .then(data => setGarminConnected(data.connected))
-      .catch(() => {})
-      .finally(() => setGarminLoading(false))
-
-    // Handle OAuth callback redirect
-    const garminParam = searchParams.get('garmin')
-    if (garminParam === 'success') {
-      setGarminConnected(true)
-      setGarminMessage({ type: 'success', text: 'Garmin account connected successfully!' })
-      setSearchParams({}, { replace: true })
-    } else if (garminParam === 'error') {
-      const reason = searchParams.get('reason') || 'unknown'
-      setGarminMessage({ type: 'error', text: `Failed to connect Garmin: ${reason}` })
-      setSearchParams({}, { replace: true })
-    }
   }, [])
 
   function update(field, value) {
@@ -96,30 +71,6 @@ export default function SettingsPage() {
     setSaving(false)
   }
 
-  async function handleGarminConnect() {
-    setGarminLoading(true)
-    setGarminMessage(null)
-    try {
-      const data = await api('/api/garmin/connect')
-      window.location.href = data.authorization_url
-    } catch (err) {
-      setGarminMessage({ type: 'error', text: err.message || 'Failed to start Garmin connection' })
-      setGarminLoading(false)
-    }
-  }
-
-  async function handleGarminDisconnect() {
-    setGarminLoading(true)
-    try {
-      await api('/api/garmin/disconnect', { method: 'POST' })
-      setGarminConnected(false)
-      setGarminMessage({ type: 'success', text: 'Garmin account disconnected' })
-    } catch (err) {
-      setGarminMessage({ type: 'error', text: err.message || 'Failed to disconnect' })
-    }
-    setGarminLoading(false)
-  }
-
   if (loading || !form) return <div className="text-center py-12 text-slate-500">Loading...</div>
 
   return (
@@ -127,48 +78,6 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold text-white mb-6">Athlete Profile</h1>
 
       <form onSubmit={handleSave} className="space-y-6">
-        {/* Garmin Connection */}
-        <Section title="Garmin Connect">
-          {garminMessage && (
-            <div className={`mb-4 px-3 py-2 rounded-lg text-sm ${
-              garminMessage.type === 'error'
-                ? 'bg-red-500/10 border border-red-500/30 text-red-400'
-                : 'bg-green-500/10 border border-green-500/30 text-green-400'
-            }`}>
-              {garminMessage.text}
-            </div>
-          )}
-
-          {garminLoading ? (
-            <p className="text-sm text-slate-500">Checking Garmin status...</p>
-          ) : garminConnected ? (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="inline-block w-2 h-2 rounded-full bg-green-400" />
-                <span className="text-sm text-green-400 font-medium">Garmin Connected</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleGarminDisconnect}
-                className="px-3 py-1.5 rounded-lg text-sm bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
-              >
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-400">Connect your Garmin account to sync rides automatically</p>
-              <button
-                type="button"
-                onClick={handleGarminConnect}
-                className="px-4 py-2 rounded-lg text-sm bg-orange-500 text-white font-medium hover:bg-orange-400 transition-colors"
-              >
-                Connect Garmin
-              </button>
-            </div>
-          )}
-        </Section>
-
         {/* Performance */}
         <Section title="Performance">
           <div className="grid grid-cols-2 gap-4">

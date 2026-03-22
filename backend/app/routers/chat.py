@@ -73,7 +73,7 @@ async def _get_athlete_profile_dict(user: User, db: AsyncSession) -> dict:
     if profile is None:
         return {
             "athlete_id": user.id, "name": user.name,
-            "ftp_watts": 200, "max_hr": 190, "weight_kg": 70.0,
+            "ftp_watts": 265, "max_hr": 192, "resting_hr": 57, "weight_kg": 68.0,
             "preferred_language": "en",
         }
     return {

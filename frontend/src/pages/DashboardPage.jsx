@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
 
 const RIDE_TYPE_COLORS = {
@@ -32,7 +32,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState(null)
-  const navigate = useNavigate()
   const perPage = 20
 
   // Garmin garth sync state
@@ -76,13 +75,7 @@ export default function DashboardPage() {
       showToast(parts.length ? parts.join(', ') : 'No new activities found')
       if (result.imported > 0) fetchRides()
     } catch (err) {
-      const msg = err.message || 'Sync failed'
-      if (msg.toLowerCase().includes('connect your garmin')) {
-        showToast('Connect your Garmin account first', 'error')
-        setTimeout(() => navigate('/settings'), 1500)
-      } else {
-        showToast(msg, 'error')
-      }
+      showToast(err.message || 'Sync failed', 'error')
     } finally {
       setSyncing(false)
     }

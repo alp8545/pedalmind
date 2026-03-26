@@ -19,20 +19,28 @@ async def _migrate_schema(conn):
     # Create any new tables
     await conn.run_sync(Base.metadata.create_all)
 
-    # Add missing columns to existing tables
+    # Add missing columns and fix column types
     def _add_missing_columns(sync_conn):
         inspector = inspect(sync_conn)
         for table_name, table in Base.metadata.tables.items():
             if not inspector.has_table(table_name):
                 continue
-            existing = {c["name"] for c in inspector.get_columns(table_name)}
+            existing_cols = {c["name"]: c for c in inspector.get_columns(table_name)}
             for col in table.columns:
-                if col.name not in existing:
+                if col.name not in existing_cols:
                     col_type = col.type.compile(sync_conn.engine.dialect)
                     sync_conn.execute(
                         text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}')
                     )
                     logger.info("Added column %s.%s", table_name, col.name)
+
+        # Migrate activities.id from INTEGER to BIGINT for large Garmin IDs
+        if inspector.has_table("activities"):
+            cols = {c["name"]: c for c in inspector.get_columns("activities")}
+            id_col = cols.get("id")
+            if id_col and str(id_col["type"]) == "INTEGER":
+                sync_conn.execute(text('ALTER TABLE "activities" ALTER COLUMN "id" TYPE BIGINT'))
+                logger.info("Migrated activities.id from INTEGER to BIGINT")
 
     await conn.run_sync(_add_missing_columns)
 

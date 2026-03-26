@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage'
 import RideDetailPage from './pages/RideDetailPage'
 import ActivityDetailPage from './pages/ActivityDetailPage'
 import ChatPage from './pages/ChatPage'
+import SeasonPage from './pages/SeasonPage'
 import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }) {
@@ -20,16 +21,31 @@ export default function App() {
   const { user } = useAuth()
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div
+      className="min-h-screen relative"
+      style={{
+        background: 'linear-gradient(180deg, #060a14 0%, #0a0e1a 30%, #0c1220 100%)',
+        fontFamily: "'DM Sans', system-ui, -apple-system, sans-serif",
+      }}
+    >
+      {/* Ambient glow */}
+      {user && (
+        <>
+          <div className="fixed pointer-events-none" style={{ top: -80, right: -80, width: 250, height: 250, background: 'radial-gradient(circle, rgba(245,158,11,0.06) 0%, transparent 70%)' }} />
+          <div className="fixed pointer-events-none" style={{ bottom: 40, left: -60, width: 200, height: 200, background: 'radial-gradient(circle, rgba(34,211,238,0.04) 0%, transparent 70%)' }} />
+        </>
+      )}
+
       {user && <Nav />}
       <UpdateBanner />
-      <main className={user ? 'pt-16' : ''}>
+      <main className={user ? 'pt-10 pb-24' : ''}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/rides/:rideId" element={<ProtectedRoute><RideDetailPage /></ProtectedRoute>} />
           <Route path="/activities/:activityId" element={<ProtectedRoute><ActivityDetailPage /></ProtectedRoute>} />
           <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+          <Route path="/season" element={<ProtectedRoute><SeasonPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

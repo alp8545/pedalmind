@@ -48,13 +48,23 @@ def _decode_garth_tokens() -> bool:
         return False
 
 
+def _test_api_call() -> dict | None:
+    """Make a lightweight API call to verify the session works. Returns result or None on failure."""
+    try:
+        result = garth.connectapi("/userprofile-service/usersummary")
+        return result
+    except Exception as e:
+        return None
+
+
 def get_garth_client():
     """Login to Garmin Connect via garth, reuse session if possible.
 
     Priority:
     1. Decode GARTH_TOKENS env var to disk (if set)
     2. Resume from token files on disk
-    3. Fresh login with GARMIN_EMAIL/PASSWORD as fallback
+    3. If resume succeeds but API returns 401, try refresh_oauth2
+    4. If refresh fails, try fresh login with GARMIN_EMAIL/PASSWORD
     """
     # Always try to decode env var first — tokens may have been refreshed
     if not _TOKEN_DIR.exists():
@@ -65,7 +75,50 @@ def get_garth_client():
         try:
             garth.resume(str(_TOKEN_DIR))
             _bootstrap_log.append(f"Resumed garth session from {_TOKEN_DIR}")
+
+            # Check if access token is expired and refresh proactively
+            if garth.client.oauth2_token.expired:
+                _bootstrap_log.append("Access token expired, attempting refresh_oauth2...")
+                try:
+                    garth.client.refresh_oauth2()
+                    garth.save(str(_TOKEN_DIR))
+                    _bootstrap_log.append("Token refresh succeeded, saved to disk")
+                except Exception as refresh_err:
+                    _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
+                    # Try fresh login as last resort
+                    if settings.GARMIN_EMAIL and settings.GARMIN_PASSWORD:
+                        _bootstrap_log.append("Attempting fresh login fallback...")
+                        try:
+                            garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
+                            garth.save(str(_TOKEN_DIR))
+                            _bootstrap_log.append("Fresh login fallback succeeded")
+                        except Exception as login_err:
+                            _bootstrap_log.append(f"Fresh login fallback failed: {login_err}")
+                            raise RuntimeError(f"All auth methods failed. Refresh: {refresh_err}, Login: {login_err}")
+                    else:
+                        raise RuntimeError(f"Token refresh failed and no GARMIN_EMAIL/PASSWORD for fallback: {refresh_err}")
+
+            # Verify API access with a lightweight call
+            test = _test_api_call()
+            if test is None:
+                _bootstrap_log.append("API test failed after resume, attempting refresh_oauth2...")
+                try:
+                    garth.client.refresh_oauth2()
+                    garth.save(str(_TOKEN_DIR))
+                    _bootstrap_log.append("Post-401 refresh succeeded")
+                    test = _test_api_call()
+                    if test is None:
+                        _bootstrap_log.append("API still failing after refresh")
+                    else:
+                        _bootstrap_log.append("API test OK after refresh")
+                except Exception as refresh_err:
+                    _bootstrap_log.append(f"Post-401 refresh failed: {refresh_err}")
+            else:
+                _bootstrap_log.append("API test OK")
+
             return garth
+        except RuntimeError:
+            raise
         except Exception as e:
             _bootstrap_log.append(f"Resume failed from {_TOKEN_DIR}: {e}")
 
@@ -75,6 +128,7 @@ def get_garth_client():
             "Cannot authenticate to Garmin: no GARTH_TOKENS, no saved tokens, "
             "and GARMIN_EMAIL/GARMIN_PASSWORD not set"
         )
+    _bootstrap_log.append("Attempting fresh login with GARMIN_EMAIL/PASSWORD...")
     garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
     _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     garth.save(str(_TOKEN_DIR))
@@ -86,12 +140,33 @@ def get_bootstrap_debug() -> dict:
     """Return debug info about garth token bootstrap for the /garmin/debug endpoint."""
     token_dir_exists = _TOKEN_DIR.exists()
     token_files = sorted(f.name for f in _TOKEN_DIR.iterdir()) if token_dir_exists else []
+
+    # Token details
+    token_details = {}
+    if token_dir_exists:
+        try:
+            oauth2_path = _TOKEN_DIR / "oauth2_token.json"
+            if oauth2_path.exists():
+                t = json.loads(oauth2_path.read_text())
+                token_details = {
+                    "access_token_preview": str(t.get("access_token", ""))[:20] + "...",
+                    "expires_at": t.get("expires_at"),
+                    "expired": t.get("expires_at", 0) < time.time(),
+                    "refresh_token_exists": bool(t.get("refresh_token")),
+                    "refresh_token_expires_at": t.get("refresh_token_expires_at"),
+                    "refresh_token_expired": t.get("refresh_token_expires_at", 0) < time.time(),
+                    "scope_preview": str(t.get("scope", ""))[:80] + "...",
+                }
+        except Exception as e:
+            token_details = {"error": str(e)}
+
     return {
         "garth_tokens_env_set": bool(os.environ.get("GARTH_TOKENS", "")),
         "garth_tokens_env_length": len(os.environ.get("GARTH_TOKENS", "")),
         "token_dir": str(_TOKEN_DIR),
         "token_dir_exists": token_dir_exists,
         "token_files": token_files,
+        "token_details": token_details,
         "bootstrap_log": list(_bootstrap_log),
     }
 

@@ -152,13 +152,53 @@ def _generate_analysis(activity: Activity) -> str:
 
 @router.get("/debug")
 async def garmin_debug():
-    """Debug endpoint: show garth token bootstrap status and filesystem state."""
+    """Debug endpoint: show garth token bootstrap status, API test, and filesystem state."""
+    from app.core.garth_client import get_garth_client
+
     result = get_bootstrap_debug()
 
     # Also show env var preview
     garth_tokens_env = os.environ.get("GARTH_TOKENS", "")
     if garth_tokens_env:
         result["garth_tokens_env_preview"] = garth_tokens_env[:50] + "..."
+
+    # Trigger bootstrap and test API
+    api_test = {"status": "not_tested"}
+    try:
+        client = await asyncio.to_thread(get_garth_client)
+        api_test["bootstrap"] = "ok"
+
+        # Lightweight API test
+        try:
+            profile = await asyncio.to_thread(
+                client.connectapi, "/userprofile-service/usersummary"
+            )
+            api_test["status"] = "ok"
+            api_test["display_name"] = profile.get("displayName", "?")
+        except Exception as api_err:
+            api_test["status"] = "api_failed"
+            api_test["error"] = str(api_err)
+
+            # Try refresh and retry
+            try:
+                await asyncio.to_thread(client.client.refresh_oauth2)
+                profile = await asyncio.to_thread(
+                    client.connectapi, "/userprofile-service/usersummary"
+                )
+                api_test["status"] = "ok_after_refresh"
+                api_test["display_name"] = profile.get("displayName", "?")
+            except Exception as refresh_err:
+                api_test["refresh_error"] = str(refresh_err)
+
+    except Exception as boot_err:
+        api_test["bootstrap"] = "failed"
+        api_test["error"] = str(boot_err)
+        api_test["traceback"] = traceback.format_exc()
+
+    result["api_test_result"] = api_test
+    # Re-fetch bootstrap log after bootstrap attempt
+    result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
+
     return result
 
 

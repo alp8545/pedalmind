@@ -197,9 +197,11 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {garminActivities.map(a => (
-                    <tr key={a.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                      <td className="px-4 py-3 text-slate-300">
-                        {a.start_time ? new Date(a.start_time).toLocaleDateString() : '-'}
+                    <tr key={a.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors cursor-pointer" onClick={() => window.location.href = `/activities/${a.id}`}>
+                      <td className="px-4 py-3">
+                        <Link to={`/activities/${a.id}`} className="text-sky-400 hover:underline">
+                          {a.start_time ? new Date(a.start_time).toLocaleDateString() : '-'}
+                        </Link>
                       </td>
                       <td className="px-4 py-3 text-white font-medium">{a.name}</td>
                       <td className="px-4 py-3 text-slate-300">
@@ -234,7 +236,7 @@ export default function DashboardPage() {
             {/* Mobile cards */}
             <div className="md:hidden space-y-3">
               {garminActivities.map(a => (
-                <div key={a.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                <Link key={a.id} to={`/activities/${a.id}`} className="block bg-slate-900 rounded-xl border border-slate-800 p-4 hover:border-slate-700 transition-colors">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-white font-medium">{a.name}</span>
                     <span className="text-xs text-slate-500">
@@ -250,14 +252,14 @@ export default function DashboardPage() {
                     <span className="text-xs text-green-400">Analyzed</span>
                   ) : (
                     <button
-                      onClick={() => handleAnalyze(a.id)}
+                      onClick={(e) => { e.preventDefault(); handleAnalyze(a.id) }}
                       disabled={analyzing === a.id}
                       className="px-3 py-1.5 rounded-lg text-xs bg-sky-600/20 text-sky-400 hover:bg-sky-600/40 disabled:opacity-50 w-full"
                     >
                       {analyzing === a.id ? 'Analyzing...' : 'Analyze'}
                     </button>
                   )}
-                </div>
+                </Link>
               ))}
             </div>
           </>

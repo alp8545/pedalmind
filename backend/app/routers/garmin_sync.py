@@ -153,64 +153,96 @@ def _generate_analysis(activity: Activity) -> str:
 @router.get("/debug")
 async def garmin_debug():
     """Debug endpoint: show garth token bootstrap status, API test, and filesystem state."""
-    from app.core.garth_client import get_garth_client
+    from datetime import datetime, timezone
+    from app.core.garth_client import get_garth_client, _get_http_status
+
+    def _ts():
+        return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
 
     result = get_bootstrap_debug()
+    debug_log: list[str] = []
 
-    # Also show env var preview
+    # Env var preview
     garth_tokens_env = os.environ.get("GARTH_TOKENS", "")
     if garth_tokens_env:
         result["garth_tokens_env_preview"] = garth_tokens_env[:50] + "..."
 
-    # Trigger bootstrap and test API
-    api_test = {"status": "not_tested", "api_test_url": API_TEST_URL}
+    # --- Step 1: bootstrap ---
+    api_test: dict = {"status": "not_tested"}
     try:
+        debug_log.append(f"[{_ts()}] Calling get_garth_client()...")
         client = await asyncio.to_thread(get_garth_client)
         api_test["bootstrap"] = "ok"
-
-        # Read token expiry from in-memory garth session
-        try:
-            api_test["token_expires_at"] = client.client.oauth2_token.expires_at
-            api_test["token_is_expired"] = client.client.oauth2_token.expired
-        except Exception:
-            pass
-
-        # API test using the same endpoint as fetch_activities
-        try:
-            activities = await asyncio.to_thread(
-                client.connectapi, API_TEST_URL, params={"limit": 1}
-            )
-            api_test["status"] = "ok"
-            api_test["activities_returned"] = len(activities) if isinstance(activities, list) else "non-list"
-        except Exception as api_err:
-            # Check if it's a 401 (auth) vs other error
-            from app.core.garth_client import _get_http_status
-            status_code = _get_http_status(api_err)
-            api_test["error"] = str(api_err)
-            api_test["http_status"] = status_code
-
-            if status_code == 401:
-                api_test["status"] = "auth_failed"
-                # Only refresh on 401
-                try:
-                    await asyncio.to_thread(client.client.refresh_oauth2)
-                    activities = await asyncio.to_thread(
-                        client.connectapi, API_TEST_URL, params={"limit": 1}
-                    )
-                    api_test["status"] = "ok_after_refresh"
-                    api_test["activities_returned"] = len(activities) if isinstance(activities, list) else "non-list"
-                except Exception as refresh_err:
-                    api_test["refresh_error"] = str(refresh_err)
-            else:
-                api_test["status"] = "api_error"
-
+        debug_log.append(f"[{_ts()}] Bootstrap OK")
     except Exception as boot_err:
         api_test["bootstrap"] = "failed"
         api_test["error"] = str(boot_err)
         api_test["traceback"] = traceback.format_exc()
+        debug_log.append(f"[{_ts()}] Bootstrap FAILED: {boot_err}")
+        result["api_test_result"] = api_test
+        result["debug_log"] = debug_log
+        result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
+        return result
+
+    # --- Step 2: dump oauth2_token details ---
+    try:
+        tok = client.client.oauth2_token
+        api_test["oauth2_token"] = {
+            "access_token_preview": tok.access_token[:20] + "...",
+            "expires_at": tok.expires_at,
+            "expires_at_human": datetime.fromtimestamp(tok.expires_at, tz=timezone.utc).isoformat(),
+            "is_expired": tok.expired,
+            "refresh_token_preview": tok.refresh_token[:20] + "..." if tok.refresh_token else None,
+            "refresh_token_expired": tok.refresh_expired,
+        }
+        debug_log.append(f"[{_ts()}] Token expires_at={tok.expires_at} expired={tok.expired}")
+    except Exception as e:
+        api_test["oauth2_token"] = {"error": str(e)}
+        debug_log.append(f"[{_ts()}] Failed to read oauth2_token: {e}")
+
+    # --- Step 3: test API call to /userprofile-service/usersummary ---
+    profile_url = "/userprofile-service/usersummary"
+    debug_log.append(f"[{_ts()}] Testing GET {profile_url}...")
+    try:
+        profile = await asyncio.to_thread(client.connectapi, profile_url)
+        api_test["profile_test"] = {"status": "ok", "url": profile_url, "response_keys": list(profile.keys()) if isinstance(profile, dict) else str(type(profile))}
+        debug_log.append(f"[{_ts()}] Profile test OK, keys={list(profile.keys()) if isinstance(profile, dict) else '?'}")
+    except Exception as profile_err:
+        http_status = _get_http_status(profile_err)
+        api_test["profile_test"] = {"status": "failed", "url": profile_url, "http_status": http_status, "error": str(profile_err)}
+        debug_log.append(f"[{_ts()}] Profile test FAILED: HTTP {http_status} — {profile_err}")
+
+        # --- Step 4: on 401, try forced refresh and retry ---
+        if http_status == 401:
+            debug_log.append(f"[{_ts()}] Got 401, attempting forced refresh_oauth2()...")
+            try:
+                await asyncio.to_thread(client.client.refresh_oauth2)
+                debug_log.append(f"[{_ts()}] Refresh OK, retrying {profile_url}...")
+                profile = await asyncio.to_thread(client.connectapi, profile_url)
+                api_test["profile_test_after_refresh"] = {"status": "ok", "response_keys": list(profile.keys()) if isinstance(profile, dict) else str(type(profile))}
+                debug_log.append(f"[{_ts()}] Retry OK after refresh")
+            except Exception as retry_err:
+                api_test["profile_test_after_refresh"] = {"status": "failed", "error": str(retry_err)}
+                debug_log.append(f"[{_ts()}] Retry FAILED after refresh: {retry_err}")
+
+    # --- Step 5: test activitylist endpoint (proven working) ---
+    debug_log.append(f"[{_ts()}] Testing GET {API_TEST_URL}?limit=1...")
+    try:
+        activities = await asyncio.to_thread(
+            client.connectapi, API_TEST_URL, params={"limit": 1}
+        )
+        count = len(activities) if isinstance(activities, list) else "non-list"
+        api_test["activity_test"] = {"status": "ok", "url": API_TEST_URL, "activities_returned": count}
+        api_test["status"] = "ok"
+        debug_log.append(f"[{_ts()}] Activity test OK, returned {count}")
+    except Exception as act_err:
+        http_status = _get_http_status(act_err)
+        api_test["activity_test"] = {"status": "failed", "url": API_TEST_URL, "http_status": http_status, "error": str(act_err)}
+        api_test["status"] = "activity_test_failed"
+        debug_log.append(f"[{_ts()}] Activity test FAILED: HTTP {http_status} — {act_err}")
 
     result["api_test_result"] = api_test
-    # Re-fetch bootstrap log after bootstrap attempt
+    result["debug_log"] = debug_log
     result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
 
     return result

@@ -46,7 +46,25 @@ export default function ChatPage() {
     setSending(false)
   }
 
-  function handleQuickReply(text) { setInput(text); setTimeout(() => sendMessage(), 0) }
+  async function handleQuickReply(text) {
+    if (sending) return
+    let convId = activeId
+    if (!convId) {
+      const conv = await api('/api/chat/conversations', { method: 'POST', body: JSON.stringify({ title: 'New Chat' }) })
+      setConversations(prev => [conv, ...prev]); convId = conv.id; setActiveId(conv.id)
+    }
+    setSending(true)
+    const tempMsg = { id: 'temp-u', role: 'user', content: text, created_at: new Date().toISOString() }
+    setMessages(prev => [...prev, tempMsg])
+    try {
+      const data = await api(`/api/chat/conversations/${convId}/messages`, { method: 'POST', body: JSON.stringify({ content: text }) })
+      setMessages(prev => [...prev.filter(m => m.id !== 'temp-u'), data.user_message, data.assistant_message])
+      setConversations(prev => prev.map(c => c.id === convId ? { ...c, title: text.slice(0, 80) } : c))
+    } catch (err) {
+      setMessages(prev => [...prev, { id: 'err', role: 'assistant', content: `Errore: ${err.message}`, created_at: new Date().toISOString() }])
+    }
+    setSending(false)
+  }
 
   return (
     <div className="flex h-[calc(100vh-7rem)] max-w-2xl mx-auto flex-col px-4">

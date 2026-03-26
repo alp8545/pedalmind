@@ -5,6 +5,7 @@ import UpdateBanner from './components/UpdateBanner'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import RideDetailPage from './pages/RideDetailPage'
+import ActivityDetailPage from './pages/ActivityDetailPage'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
 
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/rides/:rideId" element={<ProtectedRoute><RideDetailPage /></ProtectedRoute>} />
+          <Route path="/activities/:activityId" element={<ProtectedRoute><ActivityDetailPage /></ProtectedRoute>} />
           <Route path="/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />

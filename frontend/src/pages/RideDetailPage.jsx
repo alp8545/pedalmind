@@ -23,7 +23,9 @@ export default function RideDetailPage() {
   useEffect(() => {
     api(`/api/rides/${rideId}`)
       .then(setRide)
-      .catch(() => {})
+      .catch(err => {
+        console.error(`Failed to load ride ${rideId}:`, err)
+      })
       .finally(() => setLoading(false))
   }, [rideId])
 

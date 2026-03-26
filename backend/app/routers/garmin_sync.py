@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError
+from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError, API_TEST_URL
 from app.models.database import Activity
 
 logger = logging.getLogger(__name__)
@@ -163,32 +163,46 @@ async def garmin_debug():
         result["garth_tokens_env_preview"] = garth_tokens_env[:50] + "..."
 
     # Trigger bootstrap and test API
-    api_test = {"status": "not_tested"}
+    api_test = {"status": "not_tested", "api_test_url": API_TEST_URL}
     try:
         client = await asyncio.to_thread(get_garth_client)
         api_test["bootstrap"] = "ok"
 
-        # Lightweight API test
+        # Read token expiry from in-memory garth session
         try:
-            profile = await asyncio.to_thread(
-                client.connectapi, "/userprofile-service/usersummary"
+            api_test["token_expires_at"] = client.client.oauth2_token.expires_at
+            api_test["token_is_expired"] = client.client.oauth2_token.expired
+        except Exception:
+            pass
+
+        # API test using the same endpoint as fetch_activities
+        try:
+            activities = await asyncio.to_thread(
+                client.connectapi, API_TEST_URL, params={"limit": 1}
             )
             api_test["status"] = "ok"
-            api_test["display_name"] = profile.get("displayName", "?")
+            api_test["activities_returned"] = len(activities) if isinstance(activities, list) else "non-list"
         except Exception as api_err:
-            api_test["status"] = "api_failed"
+            # Check if it's a 401 (auth) vs other error
+            from app.core.garth_client import _get_http_status
+            status_code = _get_http_status(api_err)
             api_test["error"] = str(api_err)
+            api_test["http_status"] = status_code
 
-            # Try refresh and retry
-            try:
-                await asyncio.to_thread(client.client.refresh_oauth2)
-                profile = await asyncio.to_thread(
-                    client.connectapi, "/userprofile-service/usersummary"
-                )
-                api_test["status"] = "ok_after_refresh"
-                api_test["display_name"] = profile.get("displayName", "?")
-            except Exception as refresh_err:
-                api_test["refresh_error"] = str(refresh_err)
+            if status_code == 401:
+                api_test["status"] = "auth_failed"
+                # Only refresh on 401
+                try:
+                    await asyncio.to_thread(client.client.refresh_oauth2)
+                    activities = await asyncio.to_thread(
+                        client.connectapi, API_TEST_URL, params={"limit": 1}
+                    )
+                    api_test["status"] = "ok_after_refresh"
+                    api_test["activities_returned"] = len(activities) if isinstance(activities, list) else "non-list"
+                except Exception as refresh_err:
+                    api_test["refresh_error"] = str(refresh_err)
+            else:
+                api_test["status"] = "api_error"
 
     except Exception as boot_err:
         api_test["bootstrap"] = "failed"

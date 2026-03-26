@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.database import (
+    Activity,
     AthleteProfile,
     ChatConversation,
     ChatMessage,
@@ -21,6 +22,13 @@ from app.models.database import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Log API key status at import time
+logger.info("ANTHROPIC_API_KEY: %s (%d chars)",
+            "SET" if settings.ANTHROPIC_API_KEY else "NOT SET",
+            len(settings.ANTHROPIC_API_KEY))
+logger.info("AI_MODEL_CHAT: %s", settings.AI_MODEL_CHAT)
+logger.info("AI_MODEL_ANALYSIS: %s", settings.AI_MODEL_ANALYSIS)
 
 router = APIRouter()
 
@@ -74,7 +82,7 @@ async def _get_athlete_profile_dict(user: User, db: AsyncSession) -> dict:
         return {
             "athlete_id": user.id, "name": user.name,
             "ftp_watts": 265, "max_hr": 192, "resting_hr": 57, "weight_kg": 68.0,
-            "preferred_language": "en",
+            "preferred_language": "it",
         }
     return {
         "athlete_id": user.id,
@@ -85,7 +93,7 @@ async def _get_athlete_profile_dict(user: User, db: AsyncSession) -> dict:
         "weight_kg": profile.weight_kg,
         "power_meter_type": profile.power_meter_type,
         "goals_text": profile.goals_text,
-        "preferred_language": profile.preferred_language,
+        "preferred_language": profile.preferred_language or "it",
     }
 
 
@@ -99,7 +107,7 @@ async def _build_training_summary_30d(user_id: str, db: AsyncSession) -> str:
     rides = result.scalars().all()
 
     if not rides:
-        return "No rides in the last 30 days."
+        return "Nessuna uscita negli ultimi 30 giorni."
 
     total_rides = len(rides)
     total_sec = sum(r.duration_sec for r in rides)
@@ -120,11 +128,11 @@ async def _build_training_summary_30d(user_id: str, db: AsyncSession) -> str:
     avg_np = round(sum(np_values) / len(np_values)) if np_values else 0
 
     return (
-        f"Last 30 days: {total_rides} rides, "
-        f"{total_sec / 3600:.1f} hours, "
+        f"Ultimi 30 giorni: {total_rides} uscite, "
+        f"{total_sec / 3600:.1f} ore, "
         f"{total_km:.0f} km, "
-        f"total TSS {total_tss:.0f}, "
-        f"avg NP {avg_np}W"
+        f"TSS totale {total_tss:.0f}, "
+        f"NP medio {avg_np}W"
     )
 
 
@@ -140,7 +148,7 @@ async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> s
     rides = result.scalars().all()
 
     if not rides:
-        return "No rides in the last 14 days."
+        return "Nessuna uscita negli ultimi 14 giorni."
 
     lines: list[str] = []
     for r in rides:
@@ -154,12 +162,66 @@ async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> s
         )
         if r.analysis:
             a = r.analysis.analysis_json
-            ride_type = a.get("ride_type_detected", "")
-            summary_text = a.get("summary_text", "")
+            ride_type = a.get("ride_type_detected", a.get("ride_type", ""))
+            summary_text = a.get("summary_text", a.get("summary", ""))
             line += f" | {ride_type}: {summary_text}"
         lines.append(line)
 
     return "\n".join(lines)
+
+
+async def _get_latest_activity(db: AsyncSession) -> str:
+    """Get the most recent Garmin activity for context."""
+    result = await db.execute(
+        select(Activity).order_by(Activity.start_time.desc()).limit(1)
+    )
+    act = result.scalar_one_or_none()
+    if not act:
+        return "Nessuna attivita Garmin."
+
+    parts = [
+        f"Nome: {act.name}",
+        f"Data: {act.start_time.strftime('%Y-%m-%d %H:%M') if act.start_time else '?'}",
+    ]
+    if act.normalized_power:
+        parts.append(f"NP: {act.normalized_power}W")
+    if act.tss:
+        parts.append(f"TSS: {round(act.tss)}")
+    if act.intensity_factor:
+        parts.append(f"IF: {act.intensity_factor:.2f}")
+    if act.avg_hr:
+        parts.append(f"FC media: {act.avg_hr}bpm")
+    if act.distance_m:
+        parts.append(f"Distanza: {act.distance_m / 1000:.1f}km")
+    if act.duration_secs:
+        h = int(act.duration_secs // 3600)
+        m = int((act.duration_secs % 3600) // 60)
+        parts.append(f"Durata: {h}h{m:02d}m")
+    if act.analysis_text:
+        parts.append(f"Analisi: {act.analysis_text[:300]}")
+
+    return " | ".join(parts)
+
+
+async def _build_training_load(db: AsyncSession) -> str:
+    """Approximate CTL/ATL/TSB from recent activities."""
+    result = await db.execute(
+        select(Activity).where(Activity.tss.isnot(None)).order_by(Activity.start_time.desc()).limit(60)
+    )
+    activities = result.scalars().all()
+    if not activities:
+        return "Non abbastanza dati per calcolare CTL/ATL/TSB."
+
+    now = datetime.utcnow()
+    tss_7d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 7)
+    tss_28d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 28)
+    count_28d = max(sum(1 for a in activities if a.start_time and (now - a.start_time).days <= 28), 1)
+
+    atl = round(tss_7d / 7, 1)  # acute (7d avg)
+    ctl = round(tss_28d / 28, 1)  # chronic (28d avg)
+    tsb = round(ctl - atl, 1)
+
+    return f"CTL (fitness): {ctl} | ATL (fatica): {atl} | TSB (forma): {tsb} | TSS 7gg: {round(tss_7d)} | Uscite 28gg: {count_28d}"
 
 
 async def _get_conversation_history(conv_id: str, db: AsyncSession) -> list[dict]:
@@ -177,6 +239,27 @@ async def _get_conversation_history(conv_id: str, db: AsyncSession) -> list[dict
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/health")
+async def chat_health():
+    """Health check: verify Anthropic API key and test a minimal call."""
+    from ai_engine.service import test_api_key
+
+    result = {
+        "anthropic_key_set": bool(settings.ANTHROPIC_API_KEY),
+        "anthropic_key_length": len(settings.ANTHROPIC_API_KEY),
+        "model_chat": settings.AI_MODEL_CHAT,
+        "model_analysis": settings.AI_MODEL_ANALYSIS,
+    }
+
+    if settings.ANTHROPIC_API_KEY:
+        test = await test_api_key(settings.ANTHROPIC_API_KEY)
+        result["test_call"] = test
+    else:
+        result["test_call"] = {"status": "skipped", "reason": "ANTHROPIC_API_KEY not set"}
+
+    return result
+
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
@@ -210,7 +293,6 @@ async def get_messages(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Verify ownership
     conv_result = await db.execute(
         select(ChatConversation.id).where(
             ChatConversation.id == conv_id,
@@ -237,6 +319,9 @@ async def send_message(
 ):
     from ai_engine.service import chat_response
 
+    logger.info("send_message: user=%s conv=%s msg='%s...'",
+                current_user.id, conv_id, body.content[:50])
+
     # Verify ownership
     conv_result = await db.execute(
         select(ChatConversation).where(
@@ -249,22 +334,23 @@ async def send_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     # Store user message
-    user_msg = ChatMessage(
-        conversation_id=conv_id,
-        role="user",
-        content=body.content,
-    )
+    user_msg = ChatMessage(conversation_id=conv_id, role="user", content=body.content)
     db.add(user_msg)
     await db.flush()
     await db.refresh(user_msg)
 
     # Build context
+    logger.info("send_message: building context...")
     profile_dict = await _get_athlete_profile_dict(current_user, db)
     summary_30d = await _build_training_summary_30d(current_user.id, db)
     rides_14d = await _build_recent_rides_with_analysis(current_user.id, db)
+    latest_act = await _get_latest_activity(db)
+    load = await _build_training_load(db)
     history = await _get_conversation_history(conv_id, db)
-    # Remove the message we just added (it's passed separately)
     history = [m for m in history if m["content"] != body.content or m["role"] != "user"]
+
+    logger.info("send_message: context built. history=%d msgs, latest_act=%s, load=%s",
+                len(history), latest_act[:60] if latest_act else "none", load[:60] if load else "none")
 
     try:
         response_text, tokens = await chat_response(
@@ -275,11 +361,14 @@ async def send_message(
             conversation_history=history,
             model=settings.AI_MODEL_CHAT,
             api_key=settings.ANTHROPIC_API_KEY,
+            latest_activity=latest_act,
+            training_load=load,
         )
-    except Exception:
-        logger.exception("Chat AI call failed for conversation %s", conv_id)
-        await db.commit()  # keep user message saved
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI service unavailable")
+        logger.info("send_message: AI response received, tokens=%s", tokens)
+    except Exception as e:
+        logger.exception("send_message: AI call failed for conversation %s: %s", conv_id, e)
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AI service error: {e}")
 
     # Store assistant message
     assistant_msg = ChatMessage(
@@ -291,7 +380,6 @@ async def send_message(
     )
     db.add(assistant_msg)
 
-    # Auto-title on first message
     if conv.title == "New Chat":
         conv.title = body.content[:80]
 
@@ -301,19 +389,13 @@ async def send_message(
 
     return SendMessageResponse(
         user_message=MessageResponse(
-            id=user_msg.id,
-            role=user_msg.role,
-            content=user_msg.content,
-            model_used=user_msg.model_used,
-            tokens_used=user_msg.tokens_used,
+            id=user_msg.id, role=user_msg.role, content=user_msg.content,
+            model_used=user_msg.model_used, tokens_used=user_msg.tokens_used,
             created_at=user_msg.created_at,
         ),
         assistant_message=MessageResponse(
-            id=assistant_msg.id,
-            role=assistant_msg.role,
-            content=assistant_msg.content,
-            model_used=assistant_msg.model_used,
-            tokens_used=assistant_msg.tokens_used,
+            id=assistant_msg.id, role=assistant_msg.role, content=assistant_msg.content,
+            model_used=assistant_msg.model_used, tokens_used=assistant_msg.tokens_used,
             created_at=assistant_msg.created_at,
         ),
     )

@@ -241,17 +241,25 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
     if existing.scalar_one_or_none():
         return {"message": "Attivita gia scaricata", "activity_id": activity_id, "skipped": True}
 
-    details = await asyncio.to_thread(fetch_activity_details, activity_id)
-    metrics = _compute_metrics(details)
+    try:
+        details = await asyncio.to_thread(fetch_activity_details, activity_id)
+    except Exception as e:
+        logger.exception("Failed to fetch activity details for %s", activity_id)
+        raise HTTPException(status_code=502, detail=f"Errore download dettagli attivita: {e}")
 
-    activity = Activity(
-        id=activity_id,
-        raw_data=details,
-        splits_data=details.get("splits"),
-        **metrics,
-    )
-    db.add(activity)
-    await db.commit()
+    try:
+        metrics = _compute_metrics(details)
+        activity = Activity(
+            id=activity_id,
+            raw_data=details,
+            splits_data=details.get("splits"),
+            **metrics,
+        )
+        db.add(activity)
+        await db.commit()
+    except Exception as e:
+        logger.exception("Failed to save activity %s to DB", activity_id)
+        raise HTTPException(status_code=500, detail=f"Errore salvataggio attivita: {e}")
 
     return {"message": "Attivita scaricata", "activity_id": activity_id, "metrics": metrics}
 

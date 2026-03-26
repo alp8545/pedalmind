@@ -36,7 +36,18 @@ export default function DashboardPage() {
   // Garmin garth activities state
   const [garminActivities, setGarminActivities] = useState([])
   const [garminLoading, setGarminLoading] = useState(false)
+  const [garminSyncing, setGarminSyncing] = useState(null) // 'last' | 'weeks' | null
   const [analyzing, setAnalyzing] = useState(null)
+
+  // Workout upload modal state
+  const [workoutModalOpen, setWorkoutModalOpen] = useState(false)
+  const [workoutText, setWorkoutText] = useState('')
+  const [workoutDate, setWorkoutDate] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().split('T')[0]
+  })
+  const [workoutUploading, setWorkoutUploading] = useState(false)
 
   const fetchRides = () => {
     setLoading(true)
@@ -60,6 +71,47 @@ export default function DashboardPage() {
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 5000)
+  }
+
+  const handleGarminSync = async (endpoint, key) => {
+    setGarminSyncing(key)
+    try {
+      const result = await api(endpoint, { method: 'POST' })
+      if (result.skipped === true) {
+        showToast('Attivita gia scaricata')
+      } else if (result.synced !== undefined) {
+        showToast(`${result.synced} scaricate, ${result.skipped} gia presenti`)
+      } else if (result.metrics) {
+        const name = result.metrics.name || 'Activity'
+        const tss = result.metrics.tss ? ` — TSS: ${result.metrics.tss}` : ''
+        showToast(`${name} scaricata${tss}`)
+      } else {
+        showToast('Sync completato')
+      }
+      fetchGarminActivities()
+    } catch (err) {
+      showToast(err.message || 'Errore sync Garmin', 'error')
+    } finally {
+      setGarminSyncing(null)
+    }
+  }
+
+  const handleWorkoutUpload = async () => {
+    if (!workoutText.trim()) return
+    setWorkoutUploading(true)
+    try {
+      await api('/api/garmin/workout/upload', {
+        method: 'POST',
+        body: JSON.stringify({ text: workoutText.trim(), date: workoutDate }),
+      })
+      showToast('Workout caricato su Garmin')
+      setWorkoutModalOpen(false)
+      setWorkoutText('')
+    } catch (err) {
+      showToast(err.message || 'Errore caricamento workout', 'error')
+    } finally {
+      setWorkoutUploading(false)
+    }
   }
 
   const handleAnalyze = async (activityId) => {
@@ -89,8 +141,33 @@ export default function DashboardPage() {
 
       {/* Garmin Activities */}
       <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <h2 className="text-xl font-bold text-white">Garmin Activities</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => handleGarminSync('/api/garmin/sync/last', 'last')}
+              disabled={garminSyncing !== null}
+              className="px-3 py-1.5 rounded-lg text-sm bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+            >
+              {garminSyncing === 'last' ? <Spinner /> : <DownloadIcon />}
+              Scarica ultima attivita
+            </button>
+            <button
+              onClick={() => handleGarminSync('/api/garmin/sync/weeks/3', 'weeks')}
+              disabled={garminSyncing !== null}
+              className="px-3 py-1.5 rounded-lg text-sm bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+            >
+              {garminSyncing === 'weeks' ? <Spinner /> : <DownloadIcon />}
+              Scarica ultime 3 settimane
+            </button>
+            <button
+              onClick={() => setWorkoutModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-sm bg-amber-600/20 text-amber-300 border border-amber-600/30 hover:bg-amber-600/30 flex items-center gap-1.5 transition-colors"
+            >
+              <UploadIcon />
+              Carica workout
+            </button>
+          </div>
         </div>
 
         {garminLoading ? (
@@ -253,7 +330,75 @@ export default function DashboardPage() {
           )}
         </>
       )}
+
+      {/* Workout Upload Modal */}
+      {workoutModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg p-6">
+            <h3 className="text-lg font-bold text-white mb-4">Carica workout su Garmin</h3>
+            <textarea
+              value={workoutText}
+              onChange={e => setWorkoutText(e.target.value)}
+              placeholder="Es: 15min WU Z2, 4x8min sweet spot 90rpm, 10min CD"
+              rows={5}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/50 resize-y"
+            />
+            <div className="mt-3">
+              <label className="block text-xs text-slate-500 mb-1">Data (opzionale)</label>
+              <input
+                type="date"
+                value={workoutDate}
+                onChange={e => setWorkoutDate(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-5">
+              <button
+                onClick={() => { setWorkoutModalOpen(false); setWorkoutText('') }}
+                className="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                Annulla
+              </button>
+              <button
+                onClick={handleWorkoutUpload}
+                disabled={!workoutText.trim() || workoutUploading}
+                className="px-4 py-2 rounded-lg text-sm bg-amber-500 text-slate-900 font-medium hover:bg-amber-400 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+              >
+                {workoutUploading ? <Spinner /> : <UploadIcon />}
+                Carica su Garmin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  )
+}
+
+function Spinner() {
+  return (
+    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  )
+}
+
+function DownloadIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10 3a1 1 0 011 1v7.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 11.586V4a1 1 0 011-1z" />
+      <path d="M3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
+    </svg>
+  )
+}
+
+function UploadIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10 17a1 1 0 01-1-1V8.414L6.707 10.707a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L11 8.414V16a1 1 0 01-1 1z" />
+      <path d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
+    </svg>
   )
 }
 

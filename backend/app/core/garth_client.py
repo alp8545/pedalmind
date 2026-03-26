@@ -48,13 +48,34 @@ def _decode_garth_tokens() -> bool:
         return False
 
 
-def _test_api_call() -> dict | None:
-    """Make a lightweight API call to verify the session works. Returns result or None on failure."""
+API_TEST_URL = "/activitylist-service/activities/search/activities"
+
+
+def _get_http_status(exc: Exception) -> int | None:
+    """Extract HTTP status code from a GarthHTTPError, or None."""
+    if isinstance(exc, GarthHTTPError):
+        response = getattr(exc.error, "response", None)
+        if response is not None:
+            return response.status_code
+    return None
+
+
+def _test_api_call() -> tuple[str, dict | list | None, Exception | None]:
+    """Make a lightweight API call to verify the session works.
+
+    Returns (status, result, exception):
+      - ("ok", data, None) on success
+      - ("401", None, exc) on auth failure — caller should try refresh
+      - ("error", None, exc) on other failures (404, 429, etc) — no refresh needed
+    """
     try:
-        result = garth.connectapi("/userprofile-service/usersummary")
-        return result
+        result = garth.connectapi(API_TEST_URL, params={"limit": 1})
+        return ("ok", result, None)
     except Exception as e:
-        return None
+        status_code = _get_http_status(e)
+        if status_code == 401:
+            return ("401", None, e)
+        return ("error", None, e)
 
 
 def get_garth_client():
@@ -76,16 +97,15 @@ def get_garth_client():
             garth.resume(str(_TOKEN_DIR))
             _bootstrap_log.append(f"Resumed garth session from {_TOKEN_DIR}")
 
-            # Check if access token is expired and refresh proactively
+            # Only refresh if token is actually expired
             if garth.client.oauth2_token.expired:
-                _bootstrap_log.append("Access token expired, attempting refresh_oauth2...")
+                _bootstrap_log.append(f"Access token expired (expires_at={garth.client.oauth2_token.expires_at}), attempting refresh_oauth2...")
                 try:
                     garth.client.refresh_oauth2()
                     garth.save(str(_TOKEN_DIR))
                     _bootstrap_log.append("Token refresh succeeded, saved to disk")
                 except Exception as refresh_err:
                     _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
-                    # Try fresh login as last resort
                     if settings.GARMIN_EMAIL and settings.GARMIN_PASSWORD:
                         _bootstrap_log.append("Attempting fresh login fallback...")
                         try:
@@ -97,24 +117,29 @@ def get_garth_client():
                             raise RuntimeError(f"All auth methods failed. Refresh: {refresh_err}, Login: {login_err}")
                     else:
                         raise RuntimeError(f"Token refresh failed and no GARMIN_EMAIL/PASSWORD for fallback: {refresh_err}")
+            else:
+                _bootstrap_log.append(f"Access token still valid (expires_at={garth.client.oauth2_token.expires_at}), skipping refresh")
 
-            # Verify API access with a lightweight call
-            test = _test_api_call()
-            if test is None:
-                _bootstrap_log.append("API test failed after resume, attempting refresh_oauth2...")
+            # Verify API access with a real call
+            test_status, test_data, test_err = _test_api_call()
+            if test_status == "ok":
+                _bootstrap_log.append(f"API test OK via {API_TEST_URL}")
+            elif test_status == "401":
+                _bootstrap_log.append(f"API test got 401 (auth failed), attempting refresh_oauth2...")
                 try:
                     garth.client.refresh_oauth2()
                     garth.save(str(_TOKEN_DIR))
                     _bootstrap_log.append("Post-401 refresh succeeded")
-                    test = _test_api_call()
-                    if test is None:
-                        _bootstrap_log.append("API still failing after refresh")
-                    else:
+                    retry_status, _, retry_err = _test_api_call()
+                    if retry_status == "ok":
                         _bootstrap_log.append("API test OK after refresh")
+                    else:
+                        _bootstrap_log.append(f"API still failing after refresh: {retry_err}")
                 except Exception as refresh_err:
                     _bootstrap_log.append(f"Post-401 refresh failed: {refresh_err}")
             else:
-                _bootstrap_log.append("API test OK")
+                # Non-auth error (404, 429, etc) — don't try refresh
+                _bootstrap_log.append(f"API test failed (non-auth error): {test_err}")
 
             return garth
         except RuntimeError:

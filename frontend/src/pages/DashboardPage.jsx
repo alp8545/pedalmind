@@ -30,14 +30,12 @@ export default function DashboardPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
   const [toast, setToast] = useState(null)
   const perPage = 20
 
-  // Garmin garth sync state
+  // Garmin garth activities state
   const [garminActivities, setGarminActivities] = useState([])
   const [garminLoading, setGarminLoading] = useState(false)
-  const [garminSyncing, setGarminSyncing] = useState(false)
   const [analyzing, setAnalyzing] = useState(null)
 
   const fetchRides = () => {
@@ -62,44 +60,6 @@ export default function DashboardPage() {
   const showToast = (message, type = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 5000)
-  }
-
-  const handleSync = async (endpoint) => {
-    setSyncing(true)
-    try {
-      const result = await api(endpoint, { method: 'POST' })
-      const parts = []
-      if (result.imported > 0) parts.push(`${result.imported} imported`)
-      if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
-      if (result.failed > 0) parts.push(`${result.failed} failed`)
-      showToast(parts.length ? parts.join(', ') : 'No new activities found')
-      if (result.imported > 0) fetchRides()
-    } catch (err) {
-      showToast(err.message || 'Sync failed', 'error')
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  const handleGarminSync = async (endpoint) => {
-    setGarminSyncing(true)
-    try {
-      const result = await api(endpoint, { method: 'POST' })
-      if (result.skipped) {
-        showToast('Attivita gia scaricata')
-      } else if (result.synced !== undefined) {
-        showToast(`${result.synced} attivita scaricate, ${result.skipped} gia presenti`)
-      } else if (result.metrics) {
-        const name = result.metrics.name || 'Activity'
-        const tss = result.metrics.tss ? ` — TSS: ${result.metrics.tss}` : ''
-        showToast(`${name} scaricata${tss}`)
-      }
-      fetchGarminActivities()
-    } catch (err) {
-      showToast(err.message || 'Errore sync Garmin', 'error')
-    } finally {
-      setGarminSyncing(false)
-    }
   }
 
   const handleAnalyze = async (activityId) => {
@@ -127,28 +87,10 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Garmin Direct Sync (garth) */}
+      {/* Garmin Activities */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold text-white">Garmin Activities</h2>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleGarminSync('/api/garmin/sync/last')}
-              disabled={garminSyncing}
-              className="px-3 py-1.5 rounded-lg text-sm bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {garminSyncing ? <Spinner /> : null}
-              Scarica ultima uscita
-            </button>
-            <button
-              onClick={() => handleGarminSync('/api/garmin/sync/weeks/3')}
-              disabled={garminSyncing}
-              className="px-3 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {garminSyncing ? <Spinner /> : null}
-              Scarica ultime 3 settimane
-            </button>
-          </div>
         </div>
 
         {garminLoading ? (
@@ -156,7 +98,7 @@ export default function DashboardPage() {
         ) : garminActivities.length === 0 ? (
           <div className="text-center py-8 bg-slate-900 rounded-xl border border-slate-800">
             <p className="text-slate-500 mb-1">Nessuna attivita Garmin</p>
-            <p className="text-sm text-slate-600">Premi &quot;Scarica ultima uscita&quot; per iniziare</p>
+            <p className="text-sm text-slate-600">Le attivita verranno sincronizzate automaticamente</p>
           </div>
         ) : (
           <>
@@ -245,28 +187,10 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Existing Rides (OAuth sync + uploads) */}
+      {/* Existing Rides */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-white">Rides</h1>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleSync('/api/sync/latest')}
-            disabled={syncing}
-            className="px-3 py-1.5 rounded-lg text-sm bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-50 flex items-center gap-1.5"
-          >
-            {syncing ? <Spinner /> : null}
-            Sync Last Ride
-          </button>
-          <button
-            onClick={() => handleSync('/api/sync/recent?weeks=3')}
-            disabled={syncing}
-            className="px-3 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-50 flex items-center gap-1.5"
-          >
-            {syncing ? <Spinner /> : null}
-            Sync Last 3 Weeks
-          </button>
-          <span className="text-sm text-slate-500">{total} total</span>
-        </div>
+        <span className="text-sm text-slate-500">{total} total</span>
       </div>
 
       {loading ? (
@@ -348,15 +272,6 @@ function RideRow({ ride }) {
       <td className="px-4 py-3 text-slate-300">{ride.if_val ?? '-'}</td>
       <td className="px-4 py-3"><Badge type={ride.ride_type} /></td>
     </tr>
-  )
-}
-
-function Spinner() {
-  return (
-    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
   )
 }
 

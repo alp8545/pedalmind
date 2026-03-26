@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Boolean, String, Integer, Float, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import BigInteger, Boolean, String, Integer, Float, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -74,7 +74,7 @@ class Activity(Base):
     """
     __tablename__ = "activities"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)  # Garmin activity ID
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)  # Garmin activity ID
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     sport: Mapped[str | None] = mapped_column(String(50), nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

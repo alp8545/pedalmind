@@ -38,7 +38,7 @@ export default function App() {
 
       {user && <Nav />}
       <UpdateBanner />
-      <main className={user ? 'pt-10 pb-24' : ''}>
+      <main className={user ? 'pb-28' : ''} style={user ? { paddingTop: 'calc(env(safe-area-inset-top, 12px) + 36px)' } : undefined}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />

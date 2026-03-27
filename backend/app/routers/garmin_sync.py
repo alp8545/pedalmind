@@ -37,7 +37,7 @@ def _compute_metrics(activity_data: dict) -> dict:
 
     avg_power = summary.get("averagePower")
     duration_secs = summary.get("elapsedDuration", summary.get("duration", 0))
-    normalized_power = summary.get("normPower") or avg_power
+    normalized_power = summary.get("normalizedPower") or summary.get("normPower") or avg_power
 
     tss = None
     intensity_factor = None
@@ -70,7 +70,7 @@ def _compute_metrics(activity_data: dict) -> dict:
         "normalized_power": _safe_int(normalized_power),
         "tss": tss,
         "intensity_factor": intensity_factor,
-        "avg_cadence": _safe_int(summary.get("averageBikingCadence")),
+        "avg_cadence": _safe_int(summary.get("averageBikeCadence") or summary.get("averageBikingCadence")),
         "calories": _safe_int(summary.get("calories")),
         "elevation_gain": summary.get("elevationGain"),
         "avg_speed": summary.get("averageSpeed"),

@@ -91,7 +91,7 @@ export default function DashboardPage() {
 
       {/* Header */}
       <div>
-        <div className="font-mono text-slate-500 uppercase" style={{ fontSize: 11, letterSpacing: 1 }}>{dateStr}</div>
+        <div className="font-mono text-slate-400 uppercase" style={{ fontSize: 13, letterSpacing: 1 }}>{dateStr}</div>
         <h1 className="text-2xl font-light text-slate-50 mt-0.5" style={{ letterSpacing: -0.5 }}>
           {greeting}, {user?.name?.split(' ')[0] || 'Atleta'}
         </h1>
@@ -124,14 +124,14 @@ export default function DashboardPage() {
       <G>
         <div className="flex justify-between items-center mb-2.5">
           <Label>Performance Manager</Label>
-          <span className="font-mono text-slate-600" style={{ fontSize: 9 }}>30gg</span>
+          <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>30gg</span>
         </div>
         <PMChart ctl={MOCK_CTL} atl={MOCK_ATL} tsb={MOCK_TSB} />
         <div className="flex gap-4 mt-2">
           {[{ c: '#f59e0b', l: 'Fitness' }, { c: '#ef4444', l: 'Fatica' }, { c: '#22d3ee', l: 'Forma' }].map(x => (
             <div key={x.l} className="flex items-center gap-1">
               <div className="rounded-sm" style={{ width: 8, height: 3, background: x.c }} />
-              <span className="font-mono text-slate-500" style={{ fontSize: 8 }}>{x.l}</span>
+              <span className="font-mono text-slate-400" style={{ fontSize: 8 }}>{x.l}</span>
             </div>
           ))}
         </div>
@@ -141,11 +141,11 @@ export default function DashboardPage() {
       <div>
         <Label>Attivita Garmin</Label>
         {garminLoading ? (
-          <div className="text-slate-500 text-center py-8 font-mono text-xs">Caricamento...</div>
+          <div className="text-slate-400 text-center py-8 font-mono text-xs">Caricamento...</div>
         ) : garminActivities.length === 0 ? (
           <G className="text-center py-6">
-            <p className="text-slate-500 text-sm mb-1">Nessuna attivita</p>
-            <p className="text-slate-600 font-mono" style={{ fontSize: 10 }}>Premi &quot;Scarica ultima attivita&quot;</p>
+            <p className="text-slate-400 text-sm mb-1">Nessuna attivita</p>
+            <p className="text-slate-400 font-mono" style={{ fontSize: 12 }}>Premi &quot;Scarica ultima attivita&quot;</p>
           </G>
         ) : (
           <div className="flex flex-col gap-2">
@@ -154,26 +154,26 @@ export default function DashboardPage() {
                 <G className="!p-3 hover:border-amber-500/20 transition-colors">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-slate-50 font-medium text-sm">{a.name}</span>
-                    <span className="font-mono text-slate-500" style={{ fontSize: 9 }}>
+                    <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>
                       {a.start_time ? new Date(a.start_time).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' }) : ''}
                     </span>
                   </div>
-                  <div className="flex gap-4 font-mono" style={{ fontSize: 11 }}>
+                  <div className="flex gap-4 font-mono" style={{ fontSize: 13 }}>
                     {a.distance_m && <span className="text-slate-400">{(a.distance_m / 1000).toFixed(1)}km</span>}
                     {a.duration_secs && <span className="text-slate-400">{Math.floor(a.duration_secs / 3600)}h{String(Math.floor((a.duration_secs % 3600) / 60)).padStart(2, '0')}m</span>}
                     {a.normalized_power && <span className="text-amber-400">NP {a.normalized_power}W</span>}
                     {a.tss && <span className="text-slate-400">TSS {Math.round(a.tss)}</span>}
                   </div>
                   <div className="flex justify-between items-center mt-2">
-                    <div className="flex gap-2 font-mono" style={{ fontSize: 10 }}>
-                      {a.avg_hr && <span className="text-slate-500">{a.avg_hr}bpm</span>}
-                      {a.intensity_factor && <span className="text-slate-500">IF {a.intensity_factor.toFixed(2)}</span>}
+                    <div className="flex gap-2 font-mono" style={{ fontSize: 12 }}>
+                      {a.avg_hr && <span className="text-slate-400">{a.avg_hr}bpm</span>}
+                      {a.intensity_factor && <span className="text-slate-400">IF {a.intensity_factor.toFixed(2)}</span>}
                     </div>
                     {a.analyzed ? (
-                      <span className="font-mono text-green-400" style={{ fontSize: 9 }}>Analizzata</span>
+                      <span className="font-mono text-green-400" style={{ fontSize: 12 }}>Analizzata</span>
                     ) : (
                       <button onClick={(e) => { e.preventDefault(); handleAnalyze(a.id) }} disabled={analyzing === a.id}
-                        className="font-mono text-amber-400 hover:text-amber-300 disabled:opacity-50" style={{ fontSize: 9 }}>
+                        className="font-mono text-amber-400 hover:text-amber-300 disabled:opacity-50" style={{ fontSize: 12 }}>
                         {analyzing === a.id ? 'Analisi...' : 'Analizza'}
                       </button>
                     )}
@@ -190,7 +190,7 @@ export default function DashboardPage() {
         <div>
           <div className="flex justify-between items-center mb-2">
             <Label>Rides Importate</Label>
-            <span className="font-mono text-slate-600" style={{ fontSize: 9 }}>{total} totali</span>
+            <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>{total} totali</span>
           </div>
           <div className="flex flex-col gap-1.5">
             {rides.map(ride => (
@@ -198,7 +198,7 @@ export default function DashboardPage() {
                 <G className="!p-3 hover:border-amber-500/20 transition-colors">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-50 text-sm">{new Date(ride.ride_date).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</span>
-                    <div className="flex gap-3 font-mono text-slate-400" style={{ fontSize: 10 }}>
+                    <div className="flex gap-3 font-mono text-slate-400" style={{ fontSize: 12 }}>
                       <span>{ride.distance_km?.toFixed(1)}km</span>
                       <span>{Math.round(ride.duration_sec / 60)}min</span>
                       <span>{ride.tss ?? '\u2014'} TSS</span>
@@ -211,10 +211,10 @@ export default function DashboardPage() {
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-3 mt-4">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                className="font-mono text-slate-500 hover:text-white disabled:opacity-30 text-xs">Prev</button>
-              <span className="font-mono text-slate-600" style={{ fontSize: 10 }}>{page}/{totalPages}</span>
+                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs">Prev</button>
+              <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>{page}/{totalPages}</span>
               <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-                className="font-mono text-slate-500 hover:text-white disabled:opacity-30 text-xs">Next</button>
+                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs">Next</button>
             </div>
           )}
         </div>
@@ -229,7 +229,7 @@ export default function DashboardPage() {
               placeholder="Es: 15min WU Z2, 4x8min sweet spot 90rpm, 10min CD" rows={5}
               className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/50 resize-y font-mono" />
             <div className="mt-3">
-              <label className="block font-mono text-slate-500 mb-1 uppercase" style={{ fontSize: 9, letterSpacing: 1.5 }}>Data</label>
+              <label className="block font-mono text-slate-400 mb-1 uppercase" style={{ fontSize: 12, letterSpacing: 1.5 }}>Data</label>
               <input type="date" value={workoutDate} onChange={e => setWorkoutDate(e.target.value)}
                 className="bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500/50 font-mono" />
             </div>

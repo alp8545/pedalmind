@@ -29,7 +29,7 @@ export default function SeasonPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-4">
       <div>
-        <div className="font-mono text-slate-500 uppercase" style={{ fontSize: 11, letterSpacing: 1 }}>STAGIONE 2026</div>
+        <div className="font-mono text-slate-400 uppercase" style={{ fontSize: 13, letterSpacing: 1 }}>STAGIONE 2026</div>
         <h1 className="text-2xl font-light text-slate-50 mt-0.5">Piano di Crescita</h1>
       </div>
 
@@ -45,9 +45,9 @@ export default function SeasonPage() {
           ))}
         </div>
         <div className="flex justify-between mt-1">
-          <span className="font-mono text-slate-600" style={{ fontSize: 8 }}>Gen</span>
+          <span className="font-mono text-slate-400" style={{ fontSize: 8 }}>Gen</span>
           <span className="font-mono text-amber-500" style={{ fontSize: 8 }}>{'\u25BC'} Ora</span>
-          <span className="font-mono text-slate-600" style={{ fontSize: 8 }}>Set</span>
+          <span className="font-mono text-slate-400" style={{ fontSize: 8 }}>Set</span>
         </div>
       </G>
 
@@ -56,17 +56,17 @@ export default function SeasonPage() {
         <Label>Obiettivo FTP</Label>
         <div className="flex justify-between items-center">
           <div className="flex items-baseline gap-1.5">
-            <span className="font-mono font-extralight text-slate-500" style={{ fontSize: 28 }}>265</span>
-            <span className="text-slate-600" style={{ fontSize: 18 }}>{'\u2192'}</span>
+            <span className="font-mono font-extralight text-slate-400" style={{ fontSize: 28 }}>265</span>
+            <span className="text-slate-400" style={{ fontSize: 18 }}>{'\u2192'}</span>
             <span className="font-mono font-bold text-amber-500" style={{ fontSize: 28 }}>295</span>
-            <span className="font-mono text-slate-500" style={{ fontSize: 11 }}>W</span>
+            <span className="font-mono text-slate-400" style={{ fontSize: 13 }}>W</span>
           </div>
           <DonutRing value={68} max={100} color="#f59e0b" size={56} label="%" />
         </div>
         <div className="h-1 bg-[#0f172a] rounded-full mt-3">
           <div className="h-full rounded-full" style={{ width: '68%', background: 'linear-gradient(90deg, #f59e0b, #d97706)' }} />
         </div>
-        <div className="font-mono text-slate-500 mt-1" style={{ fontSize: 9 }}>+30W rimanenti \u00B7 ~16 settimane</div>
+        <div className="font-mono text-slate-400 mt-1" style={{ fontSize: 12 }}>+30W rimanenti \u00B7 ~16 settimane</div>
       </G>
 
       {/* Races / Objectives */}
@@ -76,7 +76,7 @@ export default function SeasonPage() {
           <button
             onClick={() => setShowAddRace(true)}
             className="font-mono text-amber-400 hover:text-amber-300 transition-colors"
-            style={{ fontSize: 10 }}
+            style={{ fontSize: 12 }}
           >
             + Aggiungi obiettivo
           </button>
@@ -103,12 +103,12 @@ export default function SeasonPage() {
               />
             </div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="font-mono text-slate-500" style={{ fontSize: 9 }}>Priorita:</span>
+              <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>Priorita:</span>
               {['A', 'B', 'C'].map(p => (
                 <button key={p} onClick={() => setNewRace(prev => ({ ...prev, pri: p }))}
                   className="font-mono font-bold rounded px-2 py-0.5 transition-colors"
                   style={{
-                    fontSize: 10,
+                    fontSize: 12,
                     color: newRace.pri === p ? PRI_COLORS[p] : '#475569',
                     background: newRace.pri === p ? `${PRI_COLORS[p]}20` : 'transparent',
                     border: `1px solid ${newRace.pri === p ? PRI_COLORS[p] + '40' : 'transparent'}`,
@@ -119,7 +119,7 @@ export default function SeasonPage() {
             </div>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowAddRace(false)}
-                className="font-mono text-slate-500 hover:text-white text-xs">Annulla</button>
+                className="font-mono text-slate-400 hover:text-white text-xs">Annulla</button>
               <button onClick={addRace} disabled={!newRace.name.trim()}
                 className="font-mono text-amber-400 hover:text-amber-300 disabled:opacity-30 text-xs">Salva</button>
             </div>
@@ -128,8 +128,8 @@ export default function SeasonPage() {
 
         {races.length === 0 && !showAddRace ? (
           <G className="text-center py-6">
-            <p className="text-slate-500 text-sm mb-1">Nessun obiettivo impostato</p>
-            <p className="font-mono text-slate-600" style={{ fontSize: 10 }}>Aggiungi gare o traguardi per la stagione</p>
+            <p className="text-slate-400 text-sm mb-1">Nessun obiettivo impostato</p>
+            <p className="font-mono text-slate-400" style={{ fontSize: 12 }}>Aggiungi gare o traguardi per la stagione</p>
           </G>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -140,14 +140,14 @@ export default function SeasonPage() {
                   style={{ background: `linear-gradient(90deg, ${c}11, transparent)`, borderLeft: `3px solid ${c}` }}>
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-slate-50">{r.name}</div>
-                    <div className="font-mono text-slate-500" style={{ fontSize: 10 }}>
+                    <div className="font-mono text-slate-400" style={{ fontSize: 12 }}>
                       {r.date}{r.dist ? ` \u00B7 ${r.dist}` : ''}
                     </div>
                   </div>
                   <span className="font-mono font-bold rounded px-1.5 py-0.5"
-                    style={{ fontSize: 9, color: c, background: `${c}15` }}>{r.pri}</span>
+                    style={{ fontSize: 12, color: c, background: `${c}15` }}>{r.pri}</span>
                   <button onClick={() => removeRace(r.id)}
-                    className="text-slate-600 hover:text-red-400 transition-colors" style={{ fontSize: 12 }}>{'\u00D7'}</button>
+                    className="text-slate-400 hover:text-red-400 transition-colors" style={{ fontSize: 12 }}>{'\u00D7'}</button>
                 </div>
               )
             })}
@@ -159,15 +159,15 @@ export default function SeasonPage() {
       <G>
         <Label>Piano Settimanale</Label>
         <div className="text-center py-6">
-          <p className="text-slate-500 text-sm mb-2">Nessun piano per questa settimana</p>
-          <p className="font-mono text-slate-600 mb-4" style={{ fontSize: 10 }}>
+          <p className="text-slate-400 text-sm mb-2">Nessun piano per questa settimana</p>
+          <p className="font-mono text-slate-400 mb-4" style={{ fontSize: 12 }}>
             Usa &quot;Carica workout&quot; dalla Dashboard per creare il piano
           </p>
           <div className="flex items-center justify-center gap-1 text-amber-500/40">
             {['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((d, i) => (
               <div key={i} className="w-8 h-8 rounded-lg flex items-center justify-center font-mono"
-                style={{ fontSize: 10, background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.06)' }}>
-                <span className="text-slate-600">{d}</span>
+                style={{ fontSize: 12, background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.06)' }}>
+                <span className="text-slate-400">{d}</span>
               </div>
             ))}
           </div>

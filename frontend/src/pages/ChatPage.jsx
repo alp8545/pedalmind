@@ -80,7 +80,7 @@ export default function ChatPage() {
       <div className="flex items-center gap-3 py-3">
         <div className="w-9 h-9 rounded-full flex items-center justify-center text-base"
           style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}>
-          \u26A1
+          {'\uD83D\uDEB2'}
         </div>
         <div>
           <div className="text-sm font-semibold text-slate-50">PedalMind Coach</div>
@@ -90,7 +90,7 @@ export default function ChatPage() {
         </div>
         {/* Sidebar toggle */}
         <button onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="ml-auto font-mono text-slate-500 hover:text-white" style={{ fontSize: 10 }}>
+          className="ml-auto font-mono text-slate-400 hover:text-white" style={{ fontSize: 10 }}>
           {sidebarOpen ? 'Chiudi' : 'Chat'}
         </button>
       </div>
@@ -119,8 +119,8 @@ export default function ChatPage() {
       <div className="flex-1 overflow-y-auto flex flex-col gap-3 pb-2">
         {messages.length === 0 && (
           <div className="text-center mt-20">
-            <p className="text-slate-500 text-sm mb-1">Chiedi al tuo coach</p>
-            <p className="text-slate-600 font-mono" style={{ fontSize: 10 }}>Allenamento, analisi, consigli...</p>
+            <p className="text-slate-400 text-sm mb-1">Chiedi al tuo coach</p>
+            <p className="text-slate-400 font-mono" style={{ fontSize: 10 }}>Allenamento, analisi, consigli...</p>
           </div>
         )}
         {messages.map(msg => (
@@ -136,14 +136,14 @@ export default function ChatPage() {
             }}>
               {msg.content}
             </div>
-            <span className="font-mono text-slate-600 mt-1" style={{ fontSize: 9 }}>
+            <span className="font-mono text-slate-400 mt-1" style={{ fontSize: 9 }}>
               {new Date(msg.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
         ))}
         {sending && (
           <div className="flex" style={{ alignSelf: 'flex-start' }}>
-            <div className="px-3.5 py-2.5 text-sm text-slate-500 rounded-[14px]"
+            <div className="px-3.5 py-2.5 text-sm text-slate-400 rounded-[14px]"
               style={{ background: 'linear-gradient(135deg, rgba(15,23,42,0.9), rgba(15,23,42,0.6))', border: '1px solid rgba(148,163,184,0.1)' }}>
               Sto pensando...
             </div>

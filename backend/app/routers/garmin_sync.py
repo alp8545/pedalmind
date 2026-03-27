@@ -442,6 +442,22 @@ async def import_bulk_activities(
     existing = await db.execute(select(Activity.id))
     existing_ids = {row[0] for row in existing}
 
+    import math
+
+    def clean_float(v):
+        """Replace NaN/Inf with None."""
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        except (ValueError, TypeError):
+            return None
+
+    def clean_int(v):
+        f = clean_float(v)
+        return int(f) if f is not None else None
+
     inserted = 0
     skipped = 0
     errors = []
@@ -456,37 +472,46 @@ async def import_bulk_activities(
             continue
 
         try:
+            start_time = act.get("start_time")
+            if isinstance(start_time, str):
+                try:
+                    start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                except (ValueError, TypeError):
+                    start_time = None
+
             activity = Activity(
                 id=act_id,
-                name=act.get("name"),
+                name=act.get("name") or "Unknown",
                 sport=act.get("sport"),
-                start_time=act.get("start_time"),
-                duration_secs=act.get("duration_secs"),
-                distance_m=act.get("distance_m"),
-                avg_hr=act.get("avg_hr"),
-                max_hr=act.get("max_hr"),
-                avg_power=act.get("avg_power"),
-                max_power=act.get("max_power"),
-                normalized_power=act.get("normalized_power"),
-                tss=act.get("tss"),
-                intensity_factor=act.get("intensity_factor"),
-                avg_cadence=act.get("avg_cadence"),
-                calories=act.get("calories"),
-                elevation_gain=act.get("elevation_gain"),
-                avg_speed=act.get("avg_speed"),
+                start_time=start_time,
+                duration_secs=clean_float(act.get("duration_secs")),
+                distance_m=clean_float(act.get("distance_m")),
+                avg_hr=clean_int(act.get("avg_hr")),
+                max_hr=clean_int(act.get("max_hr")),
+                avg_power=clean_int(act.get("avg_power")),
+                max_power=clean_int(act.get("max_power")),
+                normalized_power=clean_int(act.get("normalized_power")),
+                tss=clean_float(act.get("tss")),
+                intensity_factor=clean_float(act.get("intensity_factor")),
+                avg_cadence=clean_int(act.get("avg_cadence")),
+                calories=clean_int(act.get("calories")),
+                elevation_gain=clean_float(act.get("elevation_gain")),
+                avg_speed=clean_float(act.get("avg_speed")),
                 raw_data=act.get("raw_data", {}),
                 splits_data=act.get("splits_data"),
                 analyzed=act.get("analyzed", False),
                 analysis_text=act.get("analysis_text"),
             )
             db.add(activity)
+            await db.flush()
             inserted += 1
             existing_ids.add(act_id)
         except Exception as e:
+            await db.rollback()
             errors.append(f"{act_id}: {e}")
-            if len(errors) > 10:
+            if len(errors) > 20:
                 break
 
     await db.commit()
     logger.info("Bulk import: inserted=%d, skipped=%d, errors=%d", inserted, skipped, len(errors))
-    return {"inserted": inserted, "skipped": skipped, "errors": errors[:10]}
+    return {"inserted": inserted, "skipped": skipped, "errors": errors[:20]}

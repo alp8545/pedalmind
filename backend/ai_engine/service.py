@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import traceback
@@ -160,24 +161,14 @@ async def analyze_ride(
         cardiac_analysis_json=json.dumps(cardiac, default=str, indent=2),
     )
 
-    try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        logger.info("analyze_ride: calling Anthropic API...")
-        response = await client.messages.create(
-            model=model,
-            max_tokens=3000,
-            system=RIDE_ANALYSIS_SYSTEM,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        logger.info("analyze_ride: API response received, tokens in=%d out=%d",
-                     response.usage.input_tokens, response.usage.output_tokens)
-    except APIError as e:
-        logger.error("analyze_ride: Anthropic API error: type=%s status=%s message=%s",
-                     type(e).__name__, getattr(e, 'status_code', '?'), e)
-        raise
-    except Exception as e:
-        logger.error("analyze_ride: unexpected error: %s\n%s", e, traceback.format_exc())
-        raise
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    logger.info("analyze_ride: calling Anthropic API...")
+    response = await _call_with_retry(
+        client, model=model, max_tokens=3000, system=RIDE_ANALYSIS_SYSTEM,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    logger.info("analyze_ride: API response received, tokens in=%d out=%d",
+                 response.usage.input_tokens, response.usage.output_tokens)
 
     raw_text = response.content[0].text
     # Strip markdown code fences if present
@@ -252,29 +243,69 @@ async def chat_response(
         else:
             merged.append(m)
 
-    logger.info("chat_response: sending %d messages to Anthropic", len(merged))
+    logger.info("chat_response: sending %d messages to Anthropic (model=%s)", len(merged), model)
 
-    try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        response = await client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=CHAT_SYSTEM,
-            messages=merged,
-        )
-        logger.info("chat_response: API response received, tokens in=%d out=%d",
-                     response.usage.input_tokens, response.usage.output_tokens)
-    except APIError as e:
-        logger.error("chat_response: Anthropic API error: type=%s status=%s message=%s",
-                     type(e).__name__, getattr(e, 'status_code', '?'), e)
-        raise
-    except Exception as e:
-        logger.error("chat_response: unexpected error: %s\n%s", e, traceback.format_exc())
-        raise
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    response = await _call_with_retry(
+        client, model=model, max_tokens=4096, system=CHAT_SYSTEM, messages=merged
+    )
 
     text = response.content[0].text
     tokens = response.usage.input_tokens + response.usage.output_tokens
+    logger.info("chat_response: done, tokens=%d, model=%s", tokens, response.model)
     return text, tokens
+
+
+RETRY_DELAYS = [2, 5, 10]  # seconds between retries
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+
+
+async def _call_with_retry(client, *, model, max_tokens, system, messages):
+    """Call Anthropic with retry on transient errors (529, 500, rate limit).
+    Falls back to Haiku after exhausting retries on the primary model."""
+    last_error = None
+
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        try:
+            response = await client.messages.create(
+                model=model, max_tokens=max_tokens, system=system, messages=messages,
+            )
+            return response
+        except APIError as e:
+            status = getattr(e, 'status_code', None)
+            last_error = e
+            if status in (529, 500, 502, 503):
+                if attempt < len(RETRY_DELAYS):
+                    delay = RETRY_DELAYS[attempt]
+                    logger.warning("Anthropic %d on %s, retry %d/%d in %ds",
+                                   status, model, attempt + 1, len(RETRY_DELAYS), delay)
+                    await asyncio.sleep(delay)
+                    continue
+                # Exhausted retries on primary model — try fallback
+                if model != FALLBACK_MODEL:
+                    logger.warning("Exhausted retries on %s, falling back to %s", model, FALLBACK_MODEL)
+                    try:
+                        response = await client.messages.create(
+                            model=FALLBACK_MODEL, max_tokens=max_tokens, system=system, messages=messages,
+                        )
+                        return response
+                    except APIError as fallback_err:
+                        logger.error("Fallback model %s also failed: %s", FALLBACK_MODEL, fallback_err)
+                        raise fallback_err
+            elif status == 429:
+                # Rate limit — wait longer
+                delay = 10
+                logger.warning("Anthropic 429 rate limit, waiting %ds", delay)
+                await asyncio.sleep(delay)
+                continue
+            else:
+                logger.error("Anthropic non-retryable error %s: %s", status, e)
+                raise
+        except Exception as e:
+            logger.error("Unexpected error calling Anthropic: %s\n%s", e, traceback.format_exc())
+            raise
+
+    raise last_error
 
 
 async def test_api_key(api_key: str) -> dict:

@@ -2,6 +2,7 @@ import json
 import logging
 import traceback
 from datetime import datetime, timezone
+from string import Template
 
 import anthropic
 from anthropic import APIError
@@ -151,7 +152,7 @@ async def analyze_ride(
     logger.info("analyze_ride: decoupling_pct=%s, recovery_blocks=%d",
                 cardiac.get("decoupling_pct"), len(cardiac.get("hr_recovery_blocks", [])))
 
-    user_prompt = RIDE_ANALYSIS_USER.format(
+    user_prompt = Template(RIDE_ANALYSIS_USER).safe_substitute(
         athlete_profile_json=json.dumps(athlete_profile, default=str),
         ride_data_json=json.dumps(ride_data, default=str),
         recent_rides_summary=_build_recent_summary(recent_rides),
@@ -230,7 +231,7 @@ async def chat_response(
     logger.info("chat_response: starting, model=%s, api_key_set=%s, history_len=%d",
                 model, bool(api_key), len(conversation_history))
 
-    context = CHAT_CONTEXT_TEMPLATE.format(
+    context = Template(CHAT_CONTEXT_TEMPLATE).safe_substitute(
         athlete_profile_json=json.dumps(athlete_profile, default=str),
         training_summary_30d=training_summary_30d,
         recent_rides_with_analysis=recent_rides_with_analysis,

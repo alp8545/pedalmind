@@ -49,19 +49,19 @@ NOTE:
 RIDE_ANALYSIS_USER = """Analizza questa uscita in bici.
 
 ## Profilo Atleta
-{athlete_profile_json}
+$athlete_profile_json
 
 ## Zone Potenza Coggan (basate su FTP)
-{power_zones}
+$power_zones
 
 ## Dati Uscita
-{ride_data_json}
+$ride_data_json
 
 ## Analisi Cardiaca Pre-calcolata
-{cardiac_analysis_json}
+$cardiac_analysis_json
 
 ## Contesto Recente (ultimi 7 giorni)
-{recent_rides_summary}
+$recent_rides_summary
 
 Rispondi in italiano."""
 
@@ -77,16 +77,16 @@ REGOLE:
 8. Per consigli sul prossimo allenamento, considera il TSB attuale e la fase di allenamento."""
 
 CHAT_CONTEXT_TEMPLATE = """## Profilo Atleta
-{athlete_profile_json}
+$athlete_profile_json
 
 ## Carico di Allenamento
-{training_load}
+$training_load
 
 ## Sommario Allenamento (ultimi 30 giorni)
-{training_summary_30d}
+$training_summary_30d
 
 ## Ultima Attivita Garmin
-{latest_activity}
+$latest_activity
 
 ## Uscite Recenti (ultimi 14 giorni)
-{recent_rides_with_analysis}"""
+$recent_rides_with_analysis"""

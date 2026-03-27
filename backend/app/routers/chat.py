@@ -98,74 +98,75 @@ async def _get_athlete_profile_dict(user: User, db: AsyncSession) -> dict:
 
 
 async def _build_training_summary_30d(user_id: str, db: AsyncSession) -> str:
+    """Build training summary from Activity table (Garmin data — primary source)."""
     cutoff = datetime.utcnow() - timedelta(days=30)
     result = await db.execute(
-        select(Ride)
-        .where(Ride.user_id == user_id, Ride.ride_date >= cutoff)
-        .order_by(Ride.ride_date.desc())
+        select(Activity)
+        .where(Activity.start_time >= cutoff)
+        .order_by(Activity.start_time.desc())
     )
-    rides = result.scalars().all()
+    activities = result.scalars().all()
 
-    if not rides:
+    if not activities:
         return "Nessuna uscita negli ultimi 30 giorni."
 
-    total_rides = len(rides)
-    total_sec = sum(r.duration_sec for r in rides)
-    total_km = sum(r.distance_km for r in rides)
+    total = len(activities)
+    total_sec = sum(a.duration_secs or 0 for a in activities)
+    total_km = sum((a.distance_m or 0) / 1000 for a in activities)
+    tss_values = [a.tss for a in activities if a.tss]
+    np_values = [a.normalized_power for a in activities if a.normalized_power]
+    hr_values = [a.avg_hr for a in activities if a.avg_hr]
 
-    tss_values: list[float] = []
-    np_values: list[int] = []
-    for r in rides:
-        summary = r.ride_data_json.get("summary", {})
-        tss = summary.get("training_stress_score")
-        np_w = summary.get("normalized_power_w")
-        if tss is not None:
-            tss_values.append(tss)
-        if np_w is not None:
-            np_values.append(np_w)
-
-    total_tss = sum(tss_values) if tss_values else 0
+    total_tss = sum(tss_values)
     avg_np = round(sum(np_values) / len(np_values)) if np_values else 0
+    avg_hr = round(sum(hr_values) / len(hr_values)) if hr_values else 0
 
     return (
-        f"Ultimi 30 giorni: {total_rides} uscite, "
+        f"Ultimi 30 giorni: {total} uscite, "
         f"{total_sec / 3600:.1f} ore, "
         f"{total_km:.0f} km, "
         f"TSS totale {total_tss:.0f}, "
-        f"NP medio {avg_np}W"
+        f"NP medio {avg_np}W, "
+        f"FC media {avg_hr}bpm"
     )
 
 
 async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> str:
+    """Build recent rides summary from Activity table (Garmin data)."""
     cutoff = datetime.utcnow() - timedelta(days=14)
     result = await db.execute(
-        select(Ride)
-        .options(selectinload(Ride.analysis))
-        .where(Ride.user_id == user_id, Ride.ride_date >= cutoff)
-        .order_by(Ride.ride_date.desc())
+        select(Activity)
+        .where(Activity.start_time >= cutoff)
+        .order_by(Activity.start_time.desc())
         .limit(10)
     )
-    rides = result.scalars().all()
+    activities = result.scalars().all()
 
-    if not rides:
+    if not activities:
         return "Nessuna uscita negli ultimi 14 giorni."
 
     lines: list[str] = []
-    for r in rides:
-        summary = r.ride_data_json.get("summary", {})
-        line = (
-            f"- {r.ride_date.strftime('%Y-%m-%d')}: "
-            f"{summary.get('distance_km', 0):.1f} km, "
-            f"{r.duration_sec // 60} min, "
-            f"NP {summary.get('normalized_power_w', '?')}W, "
-            f"TSS {summary.get('training_stress_score', '?')}"
-        )
-        if r.analysis:
-            a = r.analysis.analysis_json
-            ride_type = a.get("ride_type_detected", a.get("ride_type", ""))
-            summary_text = a.get("summary_text", a.get("summary", ""))
-            line += f" | {ride_type}: {summary_text}"
-        lines.append(line)
+    for a in activities:
+        date_str = a.start_time.strftime('%Y-%m-%d') if a.start_time else '?'
+        dist = f"{(a.distance_m or 0) / 1000:.1f}km"
+        dur = f"{(a.duration_secs or 0) // 60}min"
+        parts = [f"- {date_str} {a.name}: {dist}, {dur}"]
+        if a.normalized_power:
+            parts.append(f"NP {a.normalized_power}W")
+        if a.tss:
+            parts.append(f"TSS {a.tss:.0f}")
+        if a.intensity_factor:
+            parts.append(f"IF {a.intensity_factor:.2f}")
+        if a.avg_hr:
+            parts.append(f"FC {a.avg_hr}bpm")
+        # Include decoupling from raw_data if available
+        if a.raw_data and isinstance(a.raw_data, dict):
+            dec = a.raw_data.get("decoupling_pct")
+            if dec is not None:
+                parts.append(f"Dec {dec:.1f}%")
+        if a.analysis_text:
+            parts.append(f"| {a.analysis_text[:150]}")
+        lines.append(", ".join(parts))
 
     return "\n".join(lines)
 

@@ -431,3 +431,62 @@ async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db))
     await db.commit()
 
     return {"activity_id": activity_id, "analysis": analysis}
+
+
+@router.post("/import/bulk")
+async def import_bulk_activities(
+    activities: list[dict],
+    db: AsyncSession = Depends(get_db),
+):
+    """Import a batch of pre-formatted activities (from garmin-analyzer archive)."""
+    existing = await db.execute(select(Activity.id))
+    existing_ids = {row[0] for row in existing}
+
+    inserted = 0
+    skipped = 0
+    errors = []
+
+    for act in activities:
+        act_id = act.get("id")
+        if not act_id:
+            errors.append("missing id")
+            continue
+        if act_id in existing_ids:
+            skipped += 1
+            continue
+
+        try:
+            activity = Activity(
+                id=act_id,
+                name=act.get("name"),
+                sport=act.get("sport"),
+                start_time=act.get("start_time"),
+                duration_secs=act.get("duration_secs"),
+                distance_m=act.get("distance_m"),
+                avg_hr=act.get("avg_hr"),
+                max_hr=act.get("max_hr"),
+                avg_power=act.get("avg_power"),
+                max_power=act.get("max_power"),
+                normalized_power=act.get("normalized_power"),
+                tss=act.get("tss"),
+                intensity_factor=act.get("intensity_factor"),
+                avg_cadence=act.get("avg_cadence"),
+                calories=act.get("calories"),
+                elevation_gain=act.get("elevation_gain"),
+                avg_speed=act.get("avg_speed"),
+                raw_data=act.get("raw_data", {}),
+                splits_data=act.get("splits_data"),
+                analyzed=act.get("analyzed", False),
+                analysis_text=act.get("analysis_text"),
+            )
+            db.add(activity)
+            inserted += 1
+            existing_ids.add(act_id)
+        except Exception as e:
+            errors.append(f"{act_id}: {e}")
+            if len(errors) > 10:
+                break
+
+    await db.commit()
+    logger.info("Bulk import: inserted=%d, skipped=%d, errors=%d", inserted, skipped, len(errors))
+    return {"inserted": inserted, "skipped": skipped, "errors": errors[:10]}

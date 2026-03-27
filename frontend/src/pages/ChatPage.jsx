@@ -13,7 +13,15 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const bottomRef = useRef(null)
 
-  useEffect(() => { api('/api/chat/conversations').then(setConversations).catch(() => {}) }, [])
+  useEffect(() => {
+    api('/api/chat/conversations').then(convs => {
+      setConversations(convs)
+      // Auto-select most recent conversation
+      if (convs.length > 0 && !activeId) {
+        setActiveId(convs[0].id)
+      }
+    }).catch(err => console.error('Failed to load conversations:', err))
+  }, [])
   useEffect(() => {
     if (!activeId) { setMessages([]); return }
     api(`/api/chat/conversations/${activeId}/messages`).then(setMessages).catch(() => {})

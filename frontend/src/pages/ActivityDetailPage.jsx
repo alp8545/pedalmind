@@ -36,12 +36,12 @@ export default function ActivityDetailPage() {
   const laps = activity.splits_data?.lapDTOs || []
   const lapData = laps.map((lap, i) => ({
     lap: i + 1,
-    speedKmh: lap.averageSpeed ? +(lap.averageSpeed * 3.6).toFixed(1) : 0,
-    avgPower: lap.averagePower ? Math.round(lap.averagePower) : null,
+    avgPower: lap.averagePower ? Math.round(lap.averagePower) : 0,
     avgHR: lap.averageHR ? Math.round(lap.averageHR) : null,
-    distKm: lap.distance ? +(lap.distance / 1000).toFixed(1) : null,
-    durationMin: lap.duration ? Math.round(lap.duration / 60) : null,
     np: lap.normalizedPower ? Math.round(lap.normalizedPower) : null,
+    speedKmh: lap.averageSpeed ? +(lap.averageSpeed * 3.6).toFixed(1) : null,
+    distKm: lap.distance ? +(lap.distance / 1000).toFixed(1) : null,
+    durationMin: lap.duration ? +(lap.duration / 60).toFixed(1) : null,
     cadence: lap.averageBikeCadence ? Math.round(lap.averageBikeCadence) : null,
     elevGain: lap.elevationGain ? Math.round(lap.elevationGain) : null,
   }))
@@ -57,6 +57,20 @@ export default function ActivityDetailPage() {
   }))
 
   const fmtTime = (secs) => { const m = Math.floor(secs / 60); const s = Math.floor(secs % 60); return `${m}:${String(s).padStart(2, '0')}` }
+
+  // Color bar by power zone (based on FTP 265)
+  const FTP = 265
+  const powerToColor = (w) => {
+    if (!w || w === 0) return '#334155'
+    const pct = w / FTP
+    if (pct < 0.55) return ZONE_COLORS[0]  // Z1
+    if (pct < 0.75) return ZONE_COLORS[1]  // Z2
+    if (pct < 0.90) return ZONE_COLORS[2]  // Z3
+    if (pct < 1.05) return ZONE_COLORS[3]  // Z4
+    if (pct < 1.20) return ZONE_COLORS[4]  // Z5
+    if (pct < 1.50) return ZONE_COLORS[5]  // Z6
+    return ZONE_COLORS[6]                   // Z7
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-4">
@@ -90,39 +104,45 @@ export default function ActivityDetailPage() {
         ))}
       </div>
 
-      {/* Splits chart */}
+      {/* Power blocks chart — shows avg power per lap, colored by zone */}
       {lapData.length > 1 && (
         <G>
-          <Label>Splits ({lapData.length} laps)</Label>
+          <Label>Blocchi di Potenza ({lapData.length} laps)</Label>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={lapData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
               <XAxis dataKey="lap" tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} unit=" km/h" width={55} />
+              <YAxis tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} unit="W" width={45} />
               <Tooltip content={({ active, payload, label }) => {
                 if (!active || !payload?.length) return null
                 const d = payload[0].payload
                 return (
                   <div className="rounded-lg p-2.5 text-xs font-mono" style={{ background: '#1e293b', border: '1px solid #334155', color: '#e2e8f0' }}>
                     <div className="font-semibold text-white mb-1">Lap {label}</div>
-                    <div>Speed: <span className="text-amber-400">{d.speedKmh} km/h</span></div>
-                    {d.avgPower != null && <div>Power: <span className="text-amber-400">{d.avgPower}W</span></div>}
-                    {d.avgHR != null && <div>HR: <span className="text-amber-400">{d.avgHR} bpm</span></div>}
-                    {d.distKm != null && <div>Dist: {d.distKm}km</div>}
+                    <div>Potenza: <span className="text-amber-400">{d.avgPower}W</span></div>
+                    {d.np != null && <div>NP: <span className="text-amber-400">{d.np}W</span></div>}
+                    {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR} bpm</span></div>}
+                    {d.durationMin != null && <div>Durata: {d.durationMin} min</div>}
+                    {d.speedKmh != null && <div>Vel: {d.speedKmh} km/h</div>}
+                    {d.cadence != null && <div>Cadenza: {d.cadence} rpm</div>}
+                    {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
                   </div>
                 )
               }} />
-              <Bar dataKey="speedKmh" radius={[3, 3, 0, 0]}>
-                {lapData.map((d, i) => {
-                  const maxP = Math.max(...lapData.map(l => l.avgPower || 0))
-                  const ratio = maxP > 0 && d.avgPower ? d.avgPower / maxP : 0.3
-                  const r = Math.round(245 * ratio + 71 * (1 - ratio))
-                  const g = Math.round(158 * ratio + 85 * (1 - ratio))
-                  const b = Math.round(11 * ratio + 105 * (1 - ratio))
-                  return <Cell key={i} fill={`rgb(${r},${g},${b})`} />
-                })}
+              <Bar dataKey="avgPower" radius={[3, 3, 0, 0]}>
+                {lapData.map((d, i) => (
+                  <Cell key={i} fill={powerToColor(d.avgPower)} />
+                ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <div className="flex gap-3 mt-1.5 flex-wrap">
+            {['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7'].map((z, i) => (
+              <div key={z} className="flex items-center gap-1">
+                <div className="rounded-sm" style={{ width: 8, height: 8, background: ZONE_COLORS[i] }} />
+                <span className="font-mono text-slate-500" style={{ fontSize: 7 }}>{z}</span>
+              </div>
+            ))}
+          </div>
         </G>
       )}
 

@@ -436,11 +436,13 @@ async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db))
 @router.post("/import/bulk")
 async def import_bulk_activities(
     activities: list[dict],
+    upsert: bool = True,
     db: AsyncSession = Depends(get_db),
 ):
-    """Import a batch of pre-formatted activities (from garmin-analyzer archive)."""
-    existing = await db.execute(select(Activity.id))
-    existing_ids = {row[0] for row in existing}
+    """Import a batch of pre-formatted activities. With upsert=true, updates existing records."""
+    existing_result = await db.execute(select(Activity))
+    existing_map = {a.id: a for a in existing_result.scalars().all()}
+    existing_ids = set(existing_map.keys())
 
     import math
 
@@ -468,7 +470,33 @@ async def import_bulk_activities(
             errors.append("missing id")
             continue
         if act_id in existing_ids:
-            skipped += 1
+            if not upsert:
+                skipped += 1
+                continue
+            # Update existing record
+            try:
+                existing_act = existing_map[act_id]
+                for field in ['name', 'sport', 'duration_secs', 'distance_m', 'avg_hr', 'max_hr',
+                              'avg_power', 'max_power', 'normalized_power', 'tss', 'intensity_factor',
+                              'avg_cadence', 'calories', 'elevation_gain', 'avg_speed',
+                              'raw_data', 'splits_data', 'analyzed', 'analysis_text']:
+                    new_val = act.get(field)
+                    if field in ('avg_power', 'max_power', 'normalized_power', 'avg_hr', 'max_hr', 'avg_cadence', 'calories'):
+                        new_val = clean_int(new_val)
+                    elif field in ('duration_secs', 'distance_m', 'tss', 'intensity_factor', 'elevation_gain', 'avg_speed'):
+                        new_val = clean_float(new_val)
+                    # Only update if new value is not None (don't overwrite good data with None)
+                    if new_val is not None:
+                        setattr(existing_act, field, new_val)
+                start_time = act.get("start_time")
+                if isinstance(start_time, str):
+                    try:
+                        existing_act.start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except (ValueError, TypeError):
+                        pass
+                inserted += 1  # count as updated
+            except Exception as e:
+                errors.append(f"update {act_id}: {e}")
             continue
 
         try:

@@ -79,14 +79,14 @@ REGOLE:
 CHAT_CONTEXT_TEMPLATE = """## Profilo Atleta
 $athlete_profile_json
 
-## Carico di Allenamento
+## Carico di Allenamento (CTL/ATL/TSB)
 $training_load
 
-## Sommario Allenamento (ultimi 30 giorni)
-$training_summary_30d
+## Sommario Allenamento (tutti i periodi)
+$training_summary
 
 ## Ultima Attivita Garmin
 $latest_activity
 
-## Uscite Recenti (ultimi 14 giorni)
+## Ultime 20 Uscite
 $recent_rides_with_analysis"""

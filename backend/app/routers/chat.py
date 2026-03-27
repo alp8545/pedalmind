@@ -97,60 +97,69 @@ async def _get_athlete_profile_dict(user: User, db: AsyncSession) -> dict:
     }
 
 
-async def _build_training_summary_30d(user_id: str, db: AsyncSession) -> str:
-    """Build training summary from Activity table (Garmin data — primary source)."""
-    cutoff = datetime.utcnow() - timedelta(days=30)
-    result = await db.execute(
-        select(Activity)
-        .where(Activity.start_time >= cutoff)
-        .order_by(Activity.start_time.desc())
-    )
-    activities = result.scalars().all()
+async def _build_training_summary(user_id: str, db: AsyncSession) -> str:
+    """Build comprehensive training summary from ALL activities."""
+    from sqlalchemy import func as sqlfunc
 
-    if not activities:
-        return "Nessuna uscita negli ultimi 30 giorni."
+    # Total stats
+    total_result = await db.execute(select(sqlfunc.count()).select_from(Activity))
+    total_count = total_result.scalar_one()
 
-    total = len(activities)
-    total_sec = sum(a.duration_secs or 0 for a in activities)
-    total_km = sum((a.distance_m or 0) / 1000 for a in activities)
-    tss_values = [a.tss for a in activities if a.tss]
-    np_values = [a.normalized_power for a in activities if a.normalized_power]
-    hr_values = [a.avg_hr for a in activities if a.avg_hr]
+    if total_count == 0:
+        return "Nessuna attivita nel database."
 
-    total_tss = sum(tss_values)
-    avg_np = round(sum(np_values) / len(np_values)) if np_values else 0
-    avg_hr = round(sum(hr_values) / len(hr_values)) if hr_values else 0
+    # Per-period breakdowns
+    now = datetime.utcnow()
+    periods = [
+        ("7 giorni", now - timedelta(days=7)),
+        ("30 giorni", now - timedelta(days=30)),
+        ("90 giorni", now - timedelta(days=90)),
+        ("Stagione 2026", datetime(2026, 1, 1)),
+        ("Storico completo", datetime(2000, 1, 1)),
+    ]
 
-    return (
-        f"Ultimi 30 giorni: {total} uscite, "
-        f"{total_sec / 3600:.1f} ore, "
-        f"{total_km:.0f} km, "
-        f"TSS totale {total_tss:.0f}, "
-        f"NP medio {avg_np}W, "
-        f"FC media {avg_hr}bpm"
-    )
+    lines = [f"Totale attivita nel database: {total_count}"]
+
+    for label, cutoff in periods:
+        result = await db.execute(
+            select(Activity).where(Activity.start_time >= cutoff)
+        )
+        acts = result.scalars().all()
+        if not acts:
+            continue
+        total_sec = sum(a.duration_secs or 0 for a in acts)
+        total_km = sum((a.distance_m or 0) / 1000 for a in acts)
+        tss_vals = [a.tss for a in acts if a.tss]
+        np_vals = [a.normalized_power for a in acts if a.normalized_power]
+        total_tss = sum(tss_vals)
+        avg_np = round(sum(np_vals) / len(np_vals)) if np_vals else 0
+
+        lines.append(
+            f"{label}: {len(acts)} uscite, {total_sec / 3600:.0f}h, {total_km:.0f}km, "
+            f"TSS {total_tss:.0f}, NP medio {avg_np}W"
+        )
+
+    return "\n".join(lines)
 
 
 async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> str:
-    """Build recent rides summary from Activity table (Garmin data)."""
-    cutoff = datetime.utcnow() - timedelta(days=14)
+    """Build recent rides summary — last 20 activities."""
     result = await db.execute(
         select(Activity)
-        .where(Activity.start_time >= cutoff)
         .order_by(Activity.start_time.desc())
-        .limit(10)
+        .limit(20)
     )
     activities = result.scalars().all()
 
     if not activities:
-        return "Nessuna uscita negli ultimi 14 giorni."
+        return "Nessuna attivita."
 
     lines: list[str] = []
     for a in activities:
         date_str = a.start_time.strftime('%Y-%m-%d') if a.start_time else '?'
         dist = f"{(a.distance_m or 0) / 1000:.1f}km"
-        dur = f"{(a.duration_secs or 0) // 60}min"
-        parts = [f"- {date_str} {a.name}: {dist}, {dur}"]
+        dur_min = int((a.duration_secs or 0) // 60)
+        parts = [f"- {date_str} {a.name}: {dist}, {dur_min}min"]
         if a.normalized_power:
             parts.append(f"NP {a.normalized_power}W")
         if a.tss:
@@ -159,13 +168,10 @@ async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> s
             parts.append(f"IF {a.intensity_factor:.2f}")
         if a.avg_hr:
             parts.append(f"FC {a.avg_hr}bpm")
-        # Include decoupling from raw_data if available
         if a.raw_data and isinstance(a.raw_data, dict):
             dec = a.raw_data.get("decoupling_pct")
             if dec is not None:
                 parts.append(f"Dec {dec:.1f}%")
-        if a.analysis_text:
-            parts.append(f"| {a.analysis_text[:150]}")
         lines.append(", ".join(parts))
 
     return "\n".join(lines)
@@ -205,9 +211,9 @@ async def _get_latest_activity(db: AsyncSession) -> str:
 
 
 async def _build_training_load(db: AsyncSession) -> str:
-    """Approximate CTL/ATL/TSB from recent activities."""
+    """Approximate CTL/ATL/TSB from all activities with TSS."""
     result = await db.execute(
-        select(Activity).where(Activity.tss.isnot(None)).order_by(Activity.start_time.desc()).limit(60)
+        select(Activity).where(Activity.tss.isnot(None)).order_by(Activity.start_time.desc())
     )
     activities = result.scalars().all()
     if not activities:
@@ -216,13 +222,21 @@ async def _build_training_load(db: AsyncSession) -> str:
     now = datetime.utcnow()
     tss_7d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 7)
     tss_28d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 28)
-    count_28d = max(sum(1 for a in activities if a.start_time and (now - a.start_time).days <= 28), 1)
+    tss_42d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 42)
+    tss_90d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 90)
+    count_90d = sum(1 for a in activities if a.start_time and (now - a.start_time).days <= 90)
+    total_activities = len(activities)
 
-    atl = round(tss_7d / 7, 1)  # acute (7d avg)
-    ctl = round(tss_28d / 28, 1)  # chronic (28d avg)
+    atl = round(tss_7d / 7, 1)
+    ctl = round(tss_42d / 42, 1)
     tsb = round(ctl - atl, 1)
+    weekly_avg_90d = round(tss_90d / 13, 0) if tss_90d else 0
 
-    return f"CTL (fitness): {ctl} | ATL (fatica): {atl} | TSB (forma): {tsb} | TSS 7gg: {round(tss_7d)} | Uscite 28gg: {count_28d}"
+    return (
+        f"CTL (fitness 42gg): {ctl} | ATL (fatica 7gg): {atl} | TSB (forma): {tsb}\n"
+        f"TSS 7gg: {round(tss_7d)} | TSS 28gg: {round(tss_28d)} | TSS 90gg: {round(tss_90d)}\n"
+        f"Media settimanale 90gg: {weekly_avg_90d} TSS/sett | Uscite 90gg: {count_90d} | Storico totale: {total_activities} attivita"
+    )
 
 
 async def _get_conversation_history(conv_id: str, db: AsyncSession) -> list[dict]:
@@ -343,7 +357,7 @@ async def send_message(
     # Build context
     logger.info("send_message: building context...")
     profile_dict = await _get_athlete_profile_dict(current_user, db)
-    summary_30d = await _build_training_summary_30d(current_user.id, db)
+    summary_30d = await _build_training_summary(current_user.id, db)
     rides_14d = await _build_recent_rides_with_analysis(current_user.id, db)
     latest_act = await _get_latest_activity(db)
     load = await _build_training_load(db)

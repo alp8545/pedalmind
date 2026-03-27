@@ -350,10 +350,10 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/activities")
-async def list_activities(limit: int = 20, db: AsyncSession = Depends(get_db)):
+async def list_activities(limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db)):
     """List activities stored in DB, newest first."""
     result = await db.execute(
-        select(Activity).order_by(Activity.start_time.desc()).limit(limit)
+        select(Activity).order_by(Activity.start_time.desc()).offset(offset).limit(limit)
     )
     activities = result.scalars().all()
 

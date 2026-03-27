@@ -224,7 +224,7 @@ async def chat_response(
 
     context = Template(CHAT_CONTEXT_TEMPLATE).safe_substitute(
         athlete_profile_json=json.dumps(athlete_profile, default=str),
-        training_summary_30d=training_summary_30d,
+        training_summary=training_summary_30d,
         recent_rides_with_analysis=recent_rides_with_analysis,
         latest_activity=latest_activity or "Nessuna attivita recente.",
         training_load=training_load or "Non disponibile.",

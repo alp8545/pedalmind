@@ -24,6 +24,8 @@ RATE_LIMIT_WAIT = 30  # seconds to wait on 429
 
 _TOKEN_DIR = Path("/tmp/garth_tokens")
 _bootstrap_log: list[str] = []  # debug breadcrumbs for /garmin/debug endpoint
+_auth_failure_until: float = 0  # epoch timestamp — skip auth attempts until this time
+_AUTH_BACKOFF_SECS = 300  # 5 min backoff after auth failure to avoid Garmin 429 spiral
 
 
 def _decode_garth_tokens() -> bool:
@@ -87,6 +89,15 @@ def get_garth_client():
     3. If resume succeeds but API returns 401, try refresh_oauth2
     4. If refresh fails, try fresh login with GARMIN_EMAIL/PASSWORD
     """
+    global _auth_failure_until
+
+    # If we recently failed auth, don't hammer Garmin again
+    if _auth_failure_until > time.time():
+        wait = int(_auth_failure_until - time.time())
+        raise RuntimeError(
+            f"Garmin auth is in backoff mode (retry in {wait}s) to avoid 429 rate-limit spiral"
+        )
+
     # Always try to decode env var first — tokens may have been refreshed
     if not _TOKEN_DIR.exists():
         _decode_garth_tokens()
@@ -114,8 +125,12 @@ def get_garth_client():
                             _bootstrap_log.append("Fresh login fallback succeeded")
                         except Exception as login_err:
                             _bootstrap_log.append(f"Fresh login fallback failed: {login_err}")
+                            _auth_failure_until = time.time() + _AUTH_BACKOFF_SECS
+                            _bootstrap_log.append(f"Auth backoff engaged for {_AUTH_BACKOFF_SECS}s")
                             raise RuntimeError(f"All auth methods failed. Refresh: {refresh_err}, Login: {login_err}")
                     else:
+                        _auth_failure_until = time.time() + _AUTH_BACKOFF_SECS
+                        _bootstrap_log.append(f"Auth backoff engaged for {_AUTH_BACKOFF_SECS}s")
                         raise RuntimeError(f"Token refresh failed and no GARMIN_EMAIL/PASSWORD for fallback: {refresh_err}")
             else:
                 _bootstrap_log.append(f"Access token still valid (expires_at={garth.client.oauth2_token.expires_at}), skipping refresh")

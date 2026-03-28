@@ -26,10 +26,13 @@ export default function DashboardPage() {
 
   const [workoutModalOpen, setWorkoutModalOpen] = useState(false)
   const [workoutText, setWorkoutText] = useState('')
-  const [workoutDate, setWorkoutDate] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]
-  })
+  const [workoutSport, setWorkoutSport] = useState('cycling')
+  const [workoutDate, setWorkoutDate] = useState('')
+  const [workoutStep, setWorkoutStep] = useState('input') // 'input' | 'preview' | 'uploading' | 'done'
+  const [workoutInterpreting, setWorkoutInterpreting] = useState(false)
   const [workoutUploading, setWorkoutUploading] = useState(false)
+  const [workoutData, setWorkoutData] = useState(null) // WorkoutStructured from /interpret
+  const [workoutResult, setWorkoutResult] = useState(null) // upload response
 
   const fetchRides = () => {
     setLoading(true)
@@ -59,14 +62,42 @@ export default function DashboardPage() {
     } catch (err) { showToast(err.message || 'Errore sync Garmin', 'error') }
     finally { setGarminSyncing(null) }
   }
-  const handleWorkoutUpload = async () => {
+  const handleWorkoutInterpret = async () => {
     if (!workoutText.trim()) return
-    setWorkoutUploading(true)
+    setWorkoutInterpreting(true)
     try {
-      await api('/api/garmin/workout/upload', { method: 'POST', body: JSON.stringify({ text: workoutText.trim(), date: workoutDate }) })
-      showToast('Workout caricato su Garmin'); setWorkoutModalOpen(false); setWorkoutText('')
-    } catch (err) { showToast(err.message || 'Errore caricamento workout', 'error') }
-    finally { setWorkoutUploading(false) }
+      const data = await api('/api/garmin/workout/interpret', {
+        method: 'POST',
+        body: JSON.stringify({
+          description: workoutText.trim(),
+          sport: workoutSport,
+          schedule_date: workoutDate || null,
+        }),
+      })
+      setWorkoutData(data)
+      setWorkoutStep('preview')
+    } catch (err) { showToast(err.message || 'Errore interpretazione workout', 'error') }
+    finally { setWorkoutInterpreting(false) }
+  }
+  const handleWorkoutUpload = async () => {
+    if (!workoutData) return
+    setWorkoutUploading(true)
+    setWorkoutStep('uploading')
+    try {
+      const result = await api('/api/garmin/workout/upload', {
+        method: 'POST',
+        body: JSON.stringify({ workout: workoutData }),
+      })
+      setWorkoutResult(result)
+      setWorkoutStep('done')
+    } catch (err) {
+      showToast(err.message || 'Errore caricamento workout', 'error')
+      setWorkoutStep('preview')
+    } finally { setWorkoutUploading(false) }
+  }
+  const resetWorkoutModal = () => {
+    setWorkoutModalOpen(false); setWorkoutText(''); setWorkoutSport('cycling')
+    setWorkoutDate(''); setWorkoutStep('input'); setWorkoutData(null); setWorkoutResult(null)
   }
   const handleAnalyze = async (activityId) => {
     setAnalyzing(activityId)
@@ -222,39 +253,174 @@ export default function DashboardPage() {
 
       {/* Workout Modal */}
       {workoutModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <G className="w-full max-w-lg !p-6" style={{ border: '1px solid rgba(148,163,184,0.15)' }}>
-            <h3 className="text-lg font-semibold text-white mb-4">Carica workout su Garmin</h3>
-            <textarea value={workoutText} onChange={e => setWorkoutText(e.target.value)}
-              placeholder="Es: 15min WU Z2, 4x8min sweet spot 90rpm, 10min CD" rows={5}
-              className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/50 resize-y font-mono" />
-            <div className="mt-3">
-              <label className="block font-mono text-slate-400 mb-1 uppercase" style={{ fontSize: 12, letterSpacing: 1.5 }}>Data</label>
-              <input type="date" value={workoutDate} onChange={e => setWorkoutDate(e.target.value)}
-                className="bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500/50 font-mono" />
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={e => { if (e.target === e.currentTarget) resetWorkoutModal() }}>
+          <div className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl mx-0 sm:mx-4"
+            style={{ background: 'linear-gradient(135deg, rgba(12,18,32,0.98), rgba(6,10,20,0.98))', border: '1px solid rgba(148,163,184,0.12)', backdropFilter: 'blur(20px)' }}>
+            <div className="p-5">
+
+              {/* === STEP: INPUT === */}
+              {workoutStep === 'input' && <>
+                <h3 className="text-lg font-semibold text-white mb-4">Carica workout su Garmin</h3>
+                <textarea value={workoutText} onChange={e => setWorkoutText(e.target.value)}
+                  placeholder="es. sweet spot 2x20, VO2max 5x4, fondo lungo 2 ore…" rows={4}
+                  className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/50 resize-y font-mono" />
+                <div className="flex gap-3 mt-3">
+                  <div className="flex-1">
+                    <label className="block font-mono text-slate-400 mb-1 uppercase" style={{ fontSize: 11, letterSpacing: 1.5 }}>Sport</label>
+                    <div className="flex gap-1.5">
+                      {[['cycling', 'Ciclismo'], ['running', 'Corsa']].map(([val, label]) => (
+                        <button key={val} onClick={() => setWorkoutSport(val)}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-mono transition-colors ${workoutSport === val
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            : 'bg-slate-800/50 text-slate-400 border border-slate-700/30 hover:bg-slate-700/50'}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-mono text-slate-400 mb-1 uppercase" style={{ fontSize: 11, letterSpacing: 1.5 }}>Schedula per…</label>
+                    <input type="date" value={workoutDate} onChange={e => setWorkoutDate(e.target.value)}
+                      className="bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500/50 font-mono" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 mt-5">
+                  <button onClick={resetWorkoutModal}
+                    className="px-4 py-2 rounded-[10px] text-sm text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">Annulla</button>
+                  <button onClick={handleWorkoutInterpret} disabled={!workoutText.trim() || workoutInterpreting}
+                    className="px-4 py-2 rounded-[10px] text-sm font-medium disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+                    style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}>
+                    {workoutInterpreting ? <><Spinner /> Interpretazione…</> : 'Interpreta'}
+                  </button>
+                </div>
+              </>}
+
+              {/* === STEP: PREVIEW === */}
+              {workoutStep === 'preview' && workoutData && <>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-semibold text-white">{workoutData.name}</h3>
+                  <button onClick={() => setWorkoutStep('input')} className="font-mono text-slate-400 hover:text-white text-xs">Modifica</button>
+                </div>
+                <div className="flex gap-3 mb-4 font-mono" style={{ fontSize: 13 }}>
+                  <span className="text-slate-400">{workoutData.sport === 'cycling' ? 'Ciclismo' : 'Corsa'}</span>
+                  <span className="text-slate-300">{Math.floor(workoutData.estimated_duration_secs / 60)} min</span>
+                  {workoutData.tss_estimate && <span className="text-amber-400">TSS ~{workoutData.tss_estimate}</span>}
+                  {workoutData.schedule_date && <span className="text-cyan-400">{new Date(workoutData.schedule_date + 'T00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</span>}
+                </div>
+                <div className="flex flex-col gap-1">
+                  {workoutData.steps.map((step, i) => <WorkoutStepRow key={i} step={step} />)}
+                </div>
+                <div className="flex items-center justify-end gap-2 mt-5">
+                  <button onClick={() => setWorkoutStep('input')}
+                    className="px-4 py-2 rounded-[10px] text-sm text-slate-400 border border-slate-700/30 hover:text-white hover:bg-slate-800 transition-colors">Modifica</button>
+                  <button onClick={handleWorkoutUpload} disabled={workoutUploading}
+                    className="px-4 py-2 rounded-[10px] text-sm font-medium disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+                    style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}>
+                    <UploadIcon /> Carica su Garmin
+                  </button>
+                </div>
+              </>}
+
+              {/* === STEP: UPLOADING === */}
+              {workoutStep === 'uploading' && (
+                <div className="flex flex-col items-center justify-center py-10 gap-3">
+                  <Spinner size={6} />
+                  <span className="font-mono text-slate-400 text-sm">Caricamento su Garmin…</span>
+                </div>
+              )}
+
+              {/* === STEP: DONE === */}
+              {workoutStep === 'done' && workoutResult && (
+                <div className="flex flex-col items-center justify-center py-8 gap-3">
+                  <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center">
+                    <svg className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  </div>
+                  <span className="text-white font-semibold">Workout caricato!</span>
+                  <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>ID: {workoutResult.workout_id}</span>
+                  {workoutResult.scheduled && workoutResult.schedule_date && (
+                    <span className="font-mono text-cyan-400" style={{ fontSize: 13 }}>
+                      Schedulato per {new Date(workoutResult.schedule_date + 'T00:00').toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}
+                    </span>
+                  )}
+                  <button onClick={resetWorkoutModal}
+                    className="mt-4 px-5 py-2 rounded-[10px] text-sm font-medium transition-colors"
+                    style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}>
+                    Chiudi
+                  </button>
+                </div>
+              )}
+
             </div>
-            <div className="flex items-center justify-end gap-2 mt-5">
-              <button onClick={() => { setWorkoutModalOpen(false); setWorkoutText('') }}
-                className="px-4 py-2 rounded-[10px] text-sm text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">Annulla</button>
-              <button onClick={handleWorkoutUpload} disabled={!workoutText.trim() || workoutUploading}
-                className="px-4 py-2 rounded-[10px] text-sm font-medium disabled:opacity-50 flex items-center gap-1.5 transition-colors"
-                style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}>
-                {workoutUploading ? <Spinner /> : <UploadIcon />} Carica su Garmin
-              </button>
-            </div>
-          </G>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-function Spinner() {
-  return <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+function Spinner({ size = 4 }) {
+  return <svg className={`animate-spin h-${size} w-${size}`} viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
 }
 function DownloadIcon() {
   return <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 011 1v7.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 11.586V4a1 1 0 011-1z" /><path d="M3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" /></svg>
 }
 function UploadIcon() {
   return <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 17a1 1 0 01-1-1V8.414L6.707 10.707a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L11 8.414V16a1 1 0 01-1 1z" /><path d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" /></svg>
+}
+
+function fmtDuration(secs) {
+  if (!secs) return ''
+  const m = Math.floor(secs / 60), s = secs % 60
+  return s > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${m}min`
+}
+
+function stepColor(step) {
+  if (step.type === 'repeat') return '#94a3b8'
+  if (!step.target) return '#94a3b8'
+  const t = step.target
+  if (t.type === 'power.zone') {
+    if (t.value <= 2) return '#eab308' // WU/CD/endurance
+    return '#f97316' // work
+  }
+  if (t.type === 'power.range') {
+    const avg = ((t.value_low || 0) + (t.value_high || 0)) / 2
+    if (avg < 200) return '#3b82f6' // recovery/endurance
+    if (avg < 240) return '#eab308' // tempo
+    return '#f97316' // threshold+
+  }
+  return '#94a3b8'
+}
+
+function targetLabel(target) {
+  if (!target) return ''
+  if (target.type === 'power.zone') return `Z${target.value}`
+  if (target.type === 'power.range') return `${target.value_low}-${target.value_high}W`
+  if (target.type === 'heart.rate.zone') return `HR Z${target.value}`
+  return ''
+}
+
+function WorkoutStepRow({ step, indent = 0 }) {
+  if (step.type === 'repeat') {
+    return (
+      <div style={{ marginLeft: indent * 12 }}>
+        <div className="flex items-center gap-2 py-1">
+          <span style={{ color: '#94a3b8', fontSize: 13 }}>🔄</span>
+          <span className="font-mono text-slate-300" style={{ fontSize: 13 }}>{step.iterations}x</span>
+        </div>
+        <div className="border-l border-slate-700/40 ml-2">
+          {(step.steps || []).map((s, i) => <WorkoutStepRow key={i} step={s} indent={indent + 1} />)}
+        </div>
+      </div>
+    )
+  }
+  const color = stepColor(step)
+  return (
+    <div className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/[0.02]" style={{ marginLeft: indent * 12 }}>
+      <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
+      <span className="font-mono text-slate-300 flex-shrink-0" style={{ fontSize: 13, minWidth: 48 }}>{fmtDuration(step.duration_secs)}</span>
+      {step.description && <span className="text-slate-200 text-sm truncate">{step.description}</span>}
+      <span className="font-mono ml-auto flex-shrink-0" style={{ fontSize: 12, color }}>{targetLabel(step.target)}</span>
+      {step.cadence && <span className="font-mono text-slate-500 flex-shrink-0" style={{ fontSize: 11 }}>{step.cadence.low}-{step.cadence.high}rpm</span>}
+    </div>
+  )
 }

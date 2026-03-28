@@ -162,34 +162,122 @@ def _get_garmin_client():
 # Step conversion helpers
 # ---------------------------------------------------------------------------
 
+_step_order_counter = 0
+
+
+def _reset_step_order():
+    global _step_order_counter
+    _step_order_counter = 0
+
+
+def _next_step_order() -> int:
+    global _step_order_counter
+    _step_order_counter += 1
+    return _step_order_counter
+
+
+def _build_target_type(target: PowerTarget | None) -> dict:
+    """Build Garmin targetType dict from our PowerTarget model."""
+    if not target:
+        return {
+            "workoutTargetTypeId": 1,
+            "workoutTargetTypeKey": "no.target",
+            "displayOrder": 1,
+        }
+
+    if target.type == "power.zone":
+        return {
+            "workoutTargetTypeId": 5,
+            "workoutTargetTypeKey": "power.zone",
+            "displayOrder": 1,
+            "targetValueOne": float(target.value or 0),
+            "targetValueTwo": 0.0,
+        }
+    elif target.type == "power.range":
+        return {
+            "workoutTargetTypeId": 5,
+            "workoutTargetTypeKey": "power.zone",
+            "displayOrder": 1,
+            "targetValueOne": float(target.value_low or 0),
+            "targetValueTwo": float(target.value_high or 0),
+        }
+    elif target.type == "heart.rate.zone":
+        return {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "heart.rate.zone",
+            "displayOrder": 1,
+            "targetValueOne": float(target.value or 0),
+            "targetValueTwo": 0.0,
+        }
+    return {
+        "workoutTargetTypeId": 1,
+        "workoutTargetTypeKey": "no.target",
+        "displayOrder": 1,
+    }
+
+
+def _build_cadence_target(cadence: CadenceTarget | None) -> dict | None:
+    """Build Garmin secondaryTargetType dict for cadence."""
+    if not cadence:
+        return None
+    return {
+        "workoutTargetTypeId": 3,
+        "workoutTargetTypeKey": "cadence.zone",
+        "displayOrder": 1,
+        "targetValueOne": float(cadence.low),
+        "targetValueTwo": float(cadence.high),
+    }
+
 
 def _convert_step(step: WorkoutStep):
     """Convert a WorkoutStep pydantic model to a garminconnect workout step."""
-    from garminconnect.workout import create_interval_step, create_repeat_group
+    from garminconnect.workout import ExecutableStep, RepeatGroup, StepType, ConditionType
 
     if step.type == "repeat":
-        return create_repeat_group(
-            number_of_iterations=step.iterations,
-            steps=[_convert_step(s) for s in (step.steps or [])],
+        sub_steps = [_convert_step(s) for s in (step.steps or [])]
+        order = _next_step_order()
+        return RepeatGroup(
+            stepOrder=order,
+            stepType={
+                "stepTypeId": StepType.REPEAT,
+                "stepTypeKey": "repeat",
+                "displayOrder": 6,
+            },
+            numberOfIterations=step.iterations or 1,
+            workoutSteps=sub_steps,
+            endCondition={
+                "conditionTypeId": ConditionType.ITERATIONS,
+                "conditionTypeKey": "iterations",
+                "displayOrder": 7,
+                "displayable": False,
+            },
+            endConditionValue=float(step.iterations or 1),
         )
 
     # type == "interval"
-    kwargs: dict = {"duration_secs": step.duration_secs}
+    order = _next_step_order()
+    kwargs = dict(
+        stepOrder=order,
+        stepType={
+            "stepTypeId": StepType.INTERVAL,
+            "stepTypeKey": "interval",
+            "displayOrder": 3,
+        },
+        endCondition={
+            "conditionTypeId": ConditionType.TIME,
+            "conditionTypeKey": "time",
+            "displayOrder": 2,
+            "displayable": True,
+        },
+        endConditionValue=float(step.duration_secs or 0),
+        targetType=_build_target_type(step.target),
+    )
 
-    if step.target:
-        kwargs["target_type"] = step.target.type
-        if step.target.type in ("power.zone", "heart.rate.zone"):
-            kwargs["target_value"] = step.target.value
-        else:  # power.range
-            kwargs["target_value_low"] = step.target.value_low
-            kwargs["target_value_high"] = step.target.value_high
+    cadence_target = _build_cadence_target(step.cadence)
+    if cadence_target:
+        kwargs["secondaryTargetType"] = cadence_target
 
-    if step.cadence:
-        kwargs["secondary_target_type"] = "cadence"
-        kwargs["secondary_target_value_low"] = step.cadence.low
-        kwargs["secondary_target_value_high"] = step.cadence.high
-
-    return create_interval_step(**kwargs)
+    return ExecutableStep(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -241,19 +329,34 @@ async def interpret_workout(req: WorkoutInterpretRequest):
 @router.post("/upload", response_model=WorkoutUploadResponse)
 async def upload_workout(req: WorkoutUploadRequest):
     """Convert structured workout to Garmin format and upload."""
-    from garminconnect.workout import CyclingWorkout, RunningWorkout
+    from garminconnect.workout import CyclingWorkout, RunningWorkout, WorkoutSegment, SportType
 
     w = req.workout
 
-    if w.sport == "cycling":
-        gw = CyclingWorkout(w.name)
-    elif w.sport == "running":
-        gw = RunningWorkout(w.name)
-    else:
+    if w.sport not in ("cycling", "running"):
         raise HTTPException(status_code=400, detail=f"Unsupported sport: {w.sport}")
 
-    for step in w.steps:
-        gw.add_step(_convert_step(step))
+    _reset_step_order()
+    converted_steps = [_convert_step(step) for step in w.steps]
+
+    sport_type_id = SportType.CYCLING if w.sport == "cycling" else SportType.RUNNING
+    sport_type_key = w.sport
+
+    segment = WorkoutSegment(
+        segmentOrder=1,
+        sportType={
+            "sportTypeId": sport_type_id,
+            "sportTypeKey": sport_type_key,
+        },
+        workoutSteps=converted_steps,
+    )
+
+    WorkoutClass = CyclingWorkout if w.sport == "cycling" else RunningWorkout
+    gw = WorkoutClass(
+        workoutName=w.name,
+        estimatedDurationInSecs=w.estimated_duration_secs,
+        workoutSegments=[segment],
+    )
 
     client = _get_garmin_client()
 

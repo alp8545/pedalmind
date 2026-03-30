@@ -5,95 +5,111 @@ import time
 import pytest
 from unittest.mock import patch, MagicMock
 
-# Set required env vars before importing garth_client (it loads Settings on import)
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///test.db")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 from app.core.garth_client import (
-    _call_with_retry,
+    _sync_api_call,
+    _ensure_auth,
+    _needs_refresh,
     GarminRateLimitError,
     MIN_CALL_INTERVAL,
 )
 
 
-def _make_429_error():
-    """Create an exception that _is_rate_limit() recognizes as a 429."""
-    # _is_rate_limit checks: isinstance(exc, GarthHTTPError) + exc.error.response.status_code == 429
-    # Also falls back to '429' in str(exc). Use the string fallback for simpler mocking.
-    return Exception("429 Too Many Requests")
+class TestNeedsRefresh:
+    """Test token expiry detection."""
+
+    def test_returns_true_when_no_token(self):
+        import garth
+        original = getattr(garth.client, 'oauth2_token', None)
+        garth.client.oauth2_token = None
+        assert _needs_refresh() is True
+        garth.client.oauth2_token = original
+
+    def test_returns_true_when_expires_at_is_none(self):
+        """BUG-3 fix: handles None expires_at without crashing."""
+        import garth
+        original = getattr(garth.client, 'oauth2_token', None)
+        mock_token = MagicMock()
+        mock_token.expires_at = None
+        garth.client.oauth2_token = mock_token
+        assert _needs_refresh() is True  # Should not raise TypeError
+        garth.client.oauth2_token = original
 
 
-class TestCallWithRetry:
-    """Test the rate-limited retry logic."""
+class TestSyncApiCall:
+    """Test the rate-limited API call logic."""
 
     def setup_method(self):
-        """Reset the global last call time before each test."""
         import app.core.garth_client as gc
         gc._last_call_time = 0.0
+        gc._client_ready = True  # skip auth for unit tests
 
-    def test_happy_path_succeeds(self):
-        """First attempt succeeds, no retry needed."""
-        mock_fn = MagicMock(return_value={"data": "ok"})
-        result = _call_with_retry(mock_fn, "arg1")
-        assert result == {"data": "ok"}
-        assert mock_fn.call_count == 1
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    def test_happy_path(self, mock_garth, mock_auth):
+        mock_garth.connectapi.return_value = [{"activityId": 123}]
+        result = _sync_api_call("/test-endpoint", params={"limit": 1})
+        assert result == [{"activityId": 123}]
+        mock_garth.connectapi.assert_called_once_with("/test-endpoint", params={"limit": 1})
 
-    def test_rate_limit_enforces_interval(self):
-        """Calls should be spaced at least MIN_CALL_INTERVAL apart."""
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    def test_rate_limit_enforces_interval(self, mock_garth, mock_auth):
         import app.core.garth_client as gc
-        gc._last_call_time = time.time()  # Pretend we just called
+        gc._last_call_time = time.time()  # pretend we just called
+        mock_garth.connectapi.return_value = "ok"
 
-        mock_fn = MagicMock(return_value="ok")
         start = time.time()
-        _call_with_retry(mock_fn)
+        _sync_api_call("/test")
         elapsed = time.time() - start
-        assert elapsed >= MIN_CALL_INTERVAL * 0.9  # Allow 10% tolerance
+        assert elapsed >= MIN_CALL_INTERVAL * 0.9
 
-    def test_429_retries_with_backoff(self):
-        """On 429, retries up to 3 times with increasing wait."""
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    @patch("app.core.garth_client.time.sleep")
+    def test_429_retries(self, mock_sleep, mock_garth, mock_auth):
         call_count = 0
-        def failing_then_ok(*args, **kwargs):
+        def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 1:
-                raise _make_429_error()
+                raise Exception("429 Too Many Requests")
             return "success"
-
-        with patch("app.core.garth_client.time.sleep"):
-            result = _call_with_retry(failing_then_ok)
+        mock_garth.connectapi.side_effect = side_effect
+        result = _sync_api_call("/test")
         assert result == "success"
         assert call_count == 2
 
-    def test_three_429s_raises(self):
-        """After 3 consecutive 429s, raises GarminRateLimitError."""
-        def always_429(*args, **kwargs):
-            raise _make_429_error()
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    @patch("app.core.garth_client.time.sleep")
+    def test_three_429s_raises(self, mock_sleep, mock_garth, mock_auth):
+        mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
+        with pytest.raises(GarminRateLimitError, match="after 3 attempts"):
+            _sync_api_call("/test")
 
-        with patch("app.core.garth_client.time.sleep"):
-            with pytest.raises(GarminRateLimitError, match="after 3 attempts"):
-                _call_with_retry(always_429)
-
-    def test_timeout_retries(self):
-        """On timeout, retries with backoff."""
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    @patch("app.core.garth_client.time.sleep")
+    def test_connection_error_retries(self, mock_sleep, mock_garth, mock_auth):
+        """BUG-6 fix: ConnectionError should retry, not crash."""
         import requests.exceptions
-
         call_count = 0
-        def timeout_then_ok(*args, **kwargs):
+        def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 1:
-                raise requests.exceptions.Timeout("timed out")
+                raise requests.exceptions.ConnectionError("DNS failure")
             return "recovered"
-
-        with patch("app.core.garth_client.time.sleep"):
-            result = _call_with_retry(timeout_then_ok)
+        mock_garth.connectapi.side_effect = side_effect
+        result = _sync_api_call("/test")
         assert result == "recovered"
-        assert call_count == 2
 
-    def test_non_429_error_raises_immediately(self):
-        """Non-rate-limit errors should not be retried."""
-        def server_error(*args, **kwargs):
-            raise ValueError("unexpected")
-
+    @patch("app.core.garth_client._ensure_auth")
+    @patch("app.core.garth_client.garth")
+    def test_non_retryable_error_raises_immediately(self, mock_garth, mock_auth):
+        mock_garth.connectapi.side_effect = ValueError("unexpected")
         with pytest.raises(ValueError, match="unexpected"):
-            _call_with_retry(server_error)
+            _sync_api_call("/test")

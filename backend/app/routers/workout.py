@@ -160,17 +160,16 @@ Return ONLY valid JSON, no markdown, no explanation. Schema:
 # ---------------------------------------------------------------------------
 
 
-def _get_garmin_client():
-    """Bootstrap a Garmin Connect client from garth tokens."""
-    from app.core.garth_client import get_garth_client
-    from garminconnect import Garmin
+async def _garmin_upload_workout(workout_dict: dict) -> dict:
+    """Upload a workout to Garmin via the async rate-limited path (BUG-21 fix)."""
+    from app.core.garth_client import async_upload_workout
+    return await async_upload_workout(workout_dict)
 
-    get_garth_client()  # ensures garth session is active
-    import garth as _garth
 
-    client = Garmin()
-    client.garth = _garth.client
-    return client
+async def _garmin_schedule_workout(workout_id: str, date_str: str):
+    """Schedule a workout on Garmin via the async rate-limited path."""
+    from app.core.garth_client import async_schedule_workout
+    return await async_schedule_workout(workout_id, date_str)
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +324,48 @@ def _convert_steps_to_dicts(steps: list[WorkoutStep]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+async def _get_interpret_prompt(db: AsyncSession) -> str:
+    """Build the interpreter system prompt with real athlete data from DB (BUG-20 fix)."""
+    from app.models.database import AthleteProfile
+    result = await db.execute(select(AthleteProfile).limit(1))
+    profile = result.scalar_one_or_none()
+
+    ftp = profile.ftp_watts if profile and profile.ftp_watts else 265
+    max_hr = profile.max_hr if profile and profile.max_hr else 192
+    resting_hr = profile.resting_hr if profile and profile.resting_hr else 57
+
+    z1 = round(ftp * 0.55)
+    z2_low, z2_high = round(ftp * 0.56), round(ftp * 0.75)
+    z3_low, z3_high = round(ftp * 0.76), round(ftp * 0.90)
+    z4_low, z4_high = round(ftp * 0.91), round(ftp * 1.05)
+    z5_low, z5_high = round(ftp * 1.06), round(ftp * 1.20)
+    z6_low, z6_high = round(ftp * 1.21), round(ftp * 1.50)
+    z7 = round(ftp * 1.51)
+    ss_low, ss_high = round(ftp * 0.88), round(ftp * 0.93)
+
+    return INTERPRET_SYSTEM_PROMPT.replace(
+        "FTP: 265W", f"FTP: {ftp}W"
+    ).replace(
+        "Z1<146W, Z2 146-199W, Z3 199-239W, Z4 239-278W, Z5 278-318W, Z6 318-398W, Z7>398W",
+        f"Z1<{z1}W, Z2 {z2_low}-{z2_high}W, Z3 {z3_low}-{z3_high}W, Z4 {z4_low}-{z4_high}W, Z5 {z5_low}-{z5_high}W, Z6 {z6_low}-{z6_high}W, Z7>{z7}W"
+    ).replace(
+        "88-93% FTP = 233-246W", f"88-93% FTP = {ss_low}-{ss_high}W"
+    ).replace(
+        "value_low=233, value_high=246", f"value_low={ss_low}, value_high={ss_high}"
+    ).replace(
+        "Max HR: 192 bpm", f"Max HR: {max_hr} bpm"
+    ).replace(
+        "Resting HR: 57 bpm", f"Resting HR: {resting_hr} bpm"
+    )
+
+
 @router.post("/interpret", response_model=WorkoutStructured)
-async def interpret_workout(req: WorkoutInterpretRequest):
+async def interpret_workout(req: WorkoutInterpretRequest, db: AsyncSession = Depends(get_db)):
     """Use Anthropic Haiku to interpret a natural-language workout description."""
     if not settings.ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
+    system_prompt = await _get_interpret_prompt(db)
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     user_prompt = f"Interpret this workout: {req.description}\nSport: {req.sport}"
@@ -339,7 +374,7 @@ async def interpret_workout(req: WorkoutInterpretRequest):
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
-            system=INTERPRET_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
     except anthropic.APIError as exc:
@@ -433,15 +468,14 @@ async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(g
             ],
         }
 
-        client = _get_garmin_client()
-        result = client.upload_workout(workout_dict)
+        result = await _garmin_upload_workout(workout_dict)
         garmin_workout_id = str(result.get("workoutId", result.get("id", "")))
         garmin_uploaded = True
 
         # Try scheduling
         if w.schedule_date:
             try:
-                client.schedule_workout(garmin_workout_id, w.schedule_date)
+                await _garmin_schedule_workout(garmin_workout_id, w.schedule_date)
                 scheduled = True
             except Exception as exc:
                 logger.warning("Workout uploaded but scheduling failed: %s", exc)

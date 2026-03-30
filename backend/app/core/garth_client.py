@@ -1,8 +1,12 @@
 """Garmin Connect client using garth (email/password auth).
 
-Uses garth library for simpler auth flow — no OAuth setup required.
-Tokens can be injected via GARTH_TOKENS env var (base64-encoded bundle)
-for environments like Railway where filesystem state is ephemeral.
+All Garmin API calls are serialized through a single asyncio.Lock to prevent:
+- Race conditions on the garth global singleton
+- Concurrent auth refresh attempts
+- Rate limit violations from parallel requests
+
+Every call goes through `garmin_api_call()` which handles auth, rate limiting,
+retries, and event loop safety (asyncio.to_thread for all blocking calls).
 """
 
 import asyncio
@@ -22,30 +26,36 @@ from app.core.config import settings
 
 logger = logging.getLogger("garth_client")
 
-RATE_LIMIT_WAIT = 30  # seconds to wait on 429
+# ---- Configuration ----
 MIN_CALL_INTERVAL = 2.0  # seconds between Garmin API calls
-
-# Async rate limiter: serializes all Garmin API calls with a 2s floor
-_rate_semaphore = asyncio.Semaphore(1)
-_last_call_time = 0.0
-
-_TOKEN_DIR = Path("/tmp/garth_tokens")
-_bootstrap_log: list[str] = []  # debug breadcrumbs for /garmin/debug endpoint
-_auth_failure_until: float = 0  # epoch timestamp — skip auth attempts until this time
-_auth_failure_count: int = 0  # consecutive auth failures — longer backoff after repeated failures
 _AUTH_BACKOFF_BASE = 300  # 5 min base backoff
 _AUTH_BACKOFF_MAX = 3600  # 1 hour max backoff
-_REFRESH_BUFFER_SECS = 300  # refresh 5 minutes BEFORE expiry to avoid last-second failures
-_client_ready: bool = False  # True when we have a working session, skip re-auth
+_REFRESH_BUFFER_SECS = 300  # refresh 5 min BEFORE expiry
 
+# ---- State (protected by _garmin_lock) ----
+_garmin_lock = asyncio.Lock()  # serializes ALL Garmin operations
+_last_call_time = 0.0
+_client_ready: bool = False
+_auth_failure_until: float = 0
+_auth_failure_count: int = 0
+
+_TOKEN_DIR = Path("/tmp/garth_tokens")
+_bootstrap_log: list[str] = []
+
+
+class GarminRateLimitError(Exception):
+    """Raised when Garmin returns 429 even after retry."""
+    pass
+
+
+# ---- Token management (all synchronous, called from within asyncio.to_thread) ----
 
 def _decode_garth_tokens() -> bool:
-    """Decode GARTH_TOKENS env var (base64 JSON bundle) to disk. Returns True if files were written."""
+    """Decode GARTH_TOKENS env var (base64 JSON bundle) to disk."""
     garth_b64 = os.environ.get("GARTH_TOKENS", "")
     if not garth_b64:
         _bootstrap_log.append("GARTH_TOKENS env var not set")
         return False
-
     try:
         bundle = json.loads(base64.b64decode(garth_b64))
         _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
@@ -61,34 +71,14 @@ def _decode_garth_tokens() -> bool:
         return False
 
 
-API_TEST_URL = "/activitylist-service/activities/search/activities"
-
-
-def _get_http_status(exc: Exception) -> int | None:
-    """Extract HTTP status code from a GarthHTTPError, or None."""
-    if isinstance(exc, GarthHTTPError):
-        response = getattr(exc.error, "response", None)
-        if response is not None:
-            return response.status_code
-    return None
-
-
-def _test_api_call() -> tuple[str, dict | list | None, Exception | None]:
-    """Make a lightweight API call to verify the session works.
-
-    Returns (status, result, exception):
-      - ("ok", data, None) on success
-      - ("401", None, exc) on auth failure — caller should try refresh
-      - ("error", None, exc) on other failures (404, 429, etc) — no refresh needed
-    """
-    try:
-        result = garth.connectapi(API_TEST_URL, params={"limit": 1})
-        return ("ok", result, None)
-    except Exception as e:
-        status_code = _get_http_status(e)
-        if status_code == 401:
-            return ("401", None, e)
-        return ("error", None, e)
+def _needs_refresh() -> bool:
+    """Check if the access token needs refreshing (expired or about to expire)."""
+    if not hasattr(garth.client, "oauth2_token") or garth.client.oauth2_token is None:
+        return True
+    expires_at = garth.client.oauth2_token.expires_at
+    if expires_at is None:
+        return True  # BUG-3 fix: handle None expires_at
+    return expires_at < (time.time() + _REFRESH_BUFFER_SECS)
 
 
 def _engage_backoff(reason: str):
@@ -100,110 +90,241 @@ def _engage_backoff(reason: str):
     _bootstrap_log.append(f"Auth backoff #{_auth_failure_count}: {backoff}s. Reason: {reason}")
 
 
-def _needs_refresh() -> bool:
-    """Check if the access token needs refreshing (expired or about to expire)."""
-    if not hasattr(garth.client, "oauth2_token") or garth.client.oauth2_token is None:
-        return True
-    expires_at = garth.client.oauth2_token.expires_at
-    return expires_at < (time.time() + _REFRESH_BUFFER_SECS)
+def _is_rate_limit(exc: Exception) -> bool:
+    """Check if an exception is a 429 rate-limit error."""
+    if isinstance(exc, GarthHTTPError):
+        response = getattr(exc.error, "response", None)
+        if response is not None and response.status_code == 429:
+            return True
+    return "429" in str(exc)
 
 
-def get_garth_client():
-    """Login to Garmin Connect via garth, reuse session if possible.
+def _ensure_auth():
+    """Ensure garth has a valid session. Called synchronously from thread pool.
 
-    Key design: avoid the 429 spiral.
-    1. If we already have a working session (_client_ready), reuse it. Only refresh
-       if the token is about to expire (5 min buffer).
-    2. On auth failure, use exponential backoff (5min → 10min → 20min → ... → 1hr max).
-    3. NEVER attempt fresh login as fallback to a 429'd refresh. That just 429s a
-       second endpoint. Only do fresh login when there are no tokens at all.
-    4. Reset backoff on ANY successful auth.
+    Handles token decode, resume, refresh, and fresh login.
+    Never tries fresh login as fallback for failed refresh (prevents 429 spiral).
     """
     global _auth_failure_until, _auth_failure_count, _client_ready
 
     # Fast path: session already working and token not about to expire
     if _client_ready and not _needs_refresh():
-        return garth
+        return
 
-    # If we recently failed auth, don't hammer Garmin again
+    # Backoff check
     if _auth_failure_until > time.time():
         wait = int(_auth_failure_until - time.time())
         raise RuntimeError(
-            f"Garmin auth is in backoff mode (retry in {wait}s). "
-            f"Failure #{_auth_failure_count}. Next attempt at backoff expiry."
+            f"Garmin auth in backoff mode (retry in {wait}s). Failure #{_auth_failure_count}."
         )
 
-    # Decode GARTH_TOKENS env var to disk on first run
-    if not _TOKEN_DIR.exists():
-        _decode_garth_tokens()
+    # Decode GARTH_TOKENS env var to disk on first run, or if dir is empty
+    if not _TOKEN_DIR.exists() or not any(_TOKEN_DIR.iterdir()):
+        _decode_garth_tokens()  # BUG-4 fix: also decode if dir is empty
 
     # Try resume from token dir
-    if _TOKEN_DIR.exists():
+    if _TOKEN_DIR.exists() and any(_TOKEN_DIR.iterdir()):
         try:
             garth.resume(str(_TOKEN_DIR))
             _bootstrap_log.append(f"Resumed garth session from {_TOKEN_DIR}")
         except Exception as e:
-            _bootstrap_log.append(f"Resume failed from {_TOKEN_DIR}: {e}")
-            # Fall through to fresh login below
+            _bootstrap_log.append(f"Resume failed: {e}")
 
-        # Check if token needs refresh
         if _needs_refresh():
-            _bootstrap_log.append(
-                f"Access token needs refresh (expires_at={garth.client.oauth2_token.expires_at})"
-            )
+            _bootstrap_log.append("Access token needs refresh")
             try:
                 garth.client.refresh_oauth2()
                 garth.save(str(_TOKEN_DIR))
-                _auth_failure_count = 0  # Reset on success
+                _auth_failure_count = 0
                 _client_ready = True
-                _bootstrap_log.append("Token refresh succeeded, saved to disk")
-                return garth
+                _bootstrap_log.append("Token refresh succeeded")
+                return
             except Exception as refresh_err:
                 _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
-                # DO NOT try fresh login here — that just 429s a second endpoint.
-                # Instead, check if the old access token might still work (Garmin
-                # sometimes accepts tokens slightly past expiry).
-                test_status, _, _ = _test_api_call()
-                if test_status == "ok":
+                # Check if old token still works
+                try:
+                    garth.connectapi(
+                        "/activitylist-service/activities/search/activities",
+                        params={"limit": 1},
+                    )
                     _bootstrap_log.append("Old access token still works despite refresh failure")
                     _client_ready = True
-                    return garth
-                # Both refresh and API failed — engage backoff
+                    return
+                except Exception:
+                    pass
                 _engage_backoff(f"refresh failed: {refresh_err}")
                 raise RuntimeError(f"Token refresh failed: {refresh_err}")
         else:
-            _bootstrap_log.append(
-                f"Access token still valid (expires_at={garth.client.oauth2_token.expires_at})"
-            )
             _client_ready = True
-            return garth
+            return
 
-    # No tokens on disk — fresh login is the only option
+    # No tokens — fresh login
     if not settings.GARMIN_EMAIL or not settings.GARMIN_PASSWORD:
-        raise RuntimeError(
-            "Cannot authenticate to Garmin: no GARTH_TOKENS, no saved tokens, "
-            "and GARMIN_EMAIL/GARMIN_PASSWORD not set"
-        )
-    _bootstrap_log.append("No tokens found, attempting fresh login...")
+        raise RuntimeError("No GARTH_TOKENS, no saved tokens, no GARMIN_EMAIL/PASSWORD")
+    _bootstrap_log.append("Attempting fresh login...")
     try:
         garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
         _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
         garth.save(str(_TOKEN_DIR))
         _auth_failure_count = 0
         _client_ready = True
-        _bootstrap_log.append("Fresh login successful, tokens saved")
-        return garth
+        _bootstrap_log.append("Fresh login successful")
     except Exception as login_err:
         _engage_backoff(f"fresh login failed: {login_err}")
         raise RuntimeError(f"Fresh login failed: {login_err}")
 
 
+def _sync_api_call(endpoint: str, method: str = "GET", **kwargs):
+    """Synchronous Garmin API call with rate limiting and retry.
+
+    Called from within asyncio.to_thread, so time.sleep is safe here.
+    """
+    global _last_call_time
+    backoff_schedule = [30, 60]
+
+    _ensure_auth()
+
+    for attempt in range(3):
+        # Enforce minimum interval between calls
+        elapsed = time.time() - _last_call_time
+        if elapsed < MIN_CALL_INTERVAL:
+            delay = MIN_CALL_INTERVAL - elapsed
+            time.sleep(delay)
+
+        try:
+            _last_call_time = time.time()
+            if method == "GET":
+                return garth.connectapi(endpoint, **kwargs)
+            else:
+                return garth.connectapi(endpoint, method=method, **kwargs)
+        except requests.exceptions.Timeout as e:
+            if attempt < 2:
+                wait = backoff_schedule[attempt]
+                logger.warning("Garmin timeout (attempt %d/3), waiting %ds", attempt + 1, wait)
+                time.sleep(wait)
+            else:
+                raise GarminRateLimitError("Garmin timeout after 3 attempts") from e
+        except requests.exceptions.ConnectionError as e:
+            # BUG-6 fix: catch ConnectionError, not just Timeout
+            if attempt < 2:
+                wait = backoff_schedule[attempt]
+                logger.warning("Garmin connection error (attempt %d/3), waiting %ds", attempt + 1, wait)
+                time.sleep(wait)
+            else:
+                raise GarminRateLimitError("Garmin connection failed after 3 attempts") from e
+        except Exception as e:
+            if not _is_rate_limit(e):
+                raise
+            if attempt < 2:
+                wait = backoff_schedule[attempt]
+                logger.warning("Garmin 429 (attempt %d/3), waiting %ds", attempt + 1, wait)
+                time.sleep(wait)
+            else:
+                raise GarminRateLimitError("Garmin rate limit (429) after 3 attempts") from e
+
+
+async def garmin_api_call(endpoint: str, method: str = "GET", **kwargs):
+    """THE single entry point for all Garmin API calls.
+
+    Serializes through _garmin_lock (prevents race conditions on garth singleton),
+    runs in thread pool (prevents event loop blocking), handles auth + rate limiting.
+    """
+    async with _garmin_lock:  # BUG-1 fix: one lock for everything
+        return await asyncio.to_thread(_sync_api_call, endpoint, method, **kwargs)
+
+
+# ---- High-level helpers (all async, all go through garmin_api_call) ----
+
+async def async_fetch_activities(days: int = 3, limit: int = 50) -> list[dict]:
+    """Fetch activity list from the last N days."""
+    activities = await garmin_api_call(
+        "/activitylist-service/activities/search/activities",
+        params={
+            "start": 0,
+            "limit": limit,
+            "startDate": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
+            "endDate": datetime.now().strftime("%Y-%m-%d"),
+        },
+    )
+    logger.info("Fetched %d activities from last %d days", len(activities), days)
+    return activities
+
+
+async def async_fetch_activity_details(activity_id: int) -> dict:
+    """Fetch full details for a single activity (details + splits + zones)."""
+    details = await garmin_api_call(f"/activity-service/activity/{activity_id}")
+
+    # Secondary data — failures are non-fatal (BUG-7: log instead of silently swallow)
+    for endpoint, key in [
+        (f"/activity-service/activity/{activity_id}/splits", "splits"),
+        (f"/activity-service/activity/{activity_id}/hrTimeInZones", "hrTimeInZones"),
+        (f"/activity-service/activity/{activity_id}/powerTimeInZones", "powerTimeInZones"),
+    ]:
+        try:
+            details[key] = await garmin_api_call(endpoint)
+        except Exception as e:
+            logger.warning("Failed to fetch %s for activity %s: %s", key, activity_id, e)
+            details[key] = None
+
+    return details
+
+
+async def async_upload_workout(workout_dict: dict) -> dict:
+    """Upload a workout to Garmin Connect."""
+    async with _garmin_lock:
+        def _upload():
+            _ensure_auth()
+            return garth.client.upload_workout(workout_dict)
+        return await asyncio.to_thread(_upload)
+
+
+async def async_schedule_workout(workout_id: str, date_str: str):
+    """Schedule a workout on Garmin Connect."""
+    async with _garmin_lock:
+        def _schedule():
+            _ensure_auth()
+            garth.client.schedule_workout(workout_id, date_str)
+        return await asyncio.to_thread(_schedule)
+
+
+# ---- Sync wrappers (for backward compat, used by garmin_sync.py via asyncio.to_thread) ----
+# These are DEPRECATED — callers should migrate to async_* versions above
+
+def fetch_activities(days: int = 3, limit: int = 50) -> list[dict]:
+    """DEPRECATED: Use async_fetch_activities instead."""
+    client = get_garth_client()
+    return _sync_api_call(
+        "/activitylist-service/activities/search/activities",
+        params={
+            "start": 0,
+            "limit": limit,
+            "startDate": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
+            "endDate": datetime.now().strftime("%Y-%m-%d"),
+        },
+    )
+
+
+def fetch_activity_details(activity_id: int) -> dict:
+    """DEPRECATED: Use async_fetch_activity_details instead."""
+    return _sync_api_call(f"/activity-service/activity/{activity_id}")
+
+
+def get_garth_client():
+    """DEPRECATED: Auth is now handled internally. Returns garth module."""
+    _ensure_auth()
+    return garth
+
+
+# ---- Debug and admin ----
+
+API_TEST_URL = "/activitylist-service/activities/search/activities"
+
+
 def get_bootstrap_debug() -> dict:
-    """Return debug info about garth token bootstrap for the /garmin/debug endpoint."""
+    """Return debug info about garth token bootstrap."""
     token_dir_exists = _TOKEN_DIR.exists()
     token_files = sorted(f.name for f in _TOKEN_DIR.iterdir()) if token_dir_exists else []
 
-    # Token details
     token_details = {}
     if token_dir_exists:
         try:
@@ -217,7 +338,6 @@ def get_bootstrap_debug() -> dict:
                     "refresh_token_exists": bool(t.get("refresh_token")),
                     "refresh_token_expires_at": t.get("refresh_token_expires_at"),
                     "refresh_token_expired": t.get("refresh_token_expires_at", 0) < time.time(),
-                    "scope_preview": str(t.get("scope", ""))[:80] + "...",
                 }
         except Exception as e:
             token_details = {"error": str(e)}
@@ -229,139 +349,17 @@ def get_bootstrap_debug() -> dict:
         "token_dir_exists": token_dir_exists,
         "token_files": token_files,
         "token_details": token_details,
+        "auth_failure_count": _auth_failure_count,
+        "auth_backoff_remaining": max(0, int(_auth_failure_until - time.time())),
+        "client_ready": _client_ready,
         "bootstrap_log": list(_bootstrap_log),
     }
 
 
 def reset_auth_backoff():
-    """Manually reset the auth backoff state. Use after Garmin rate limit clears."""
+    """Manually reset the auth backoff state."""
     global _auth_failure_until, _auth_failure_count, _client_ready
     _auth_failure_until = 0
     _auth_failure_count = 0
     _client_ready = False
     _bootstrap_log.append("Auth backoff manually reset")
-
-
-class GarminRateLimitError(Exception):
-    """Raised when Garmin returns 429 even after retry."""
-    pass
-
-
-def _is_rate_limit(exc: Exception) -> bool:
-    """Check if an exception is a 429 rate-limit error."""
-    if isinstance(exc, GarthHTTPError):
-        response = getattr(exc.error, "response", None)
-        if response is not None and response.status_code == 429:
-            return True
-    return "429" in str(exc)
-
-
-def _call_with_retry(func, *args, **kwargs):
-    """Call a garth API function with rate limiting and exponential backoff.
-
-    Rate limit: enforces MIN_CALL_INTERVAL between calls.
-    Retry: on 429 or timeout, retries up to 3 attempts total with 30s/60s waits.
-    """
-    global _last_call_time
-    backoff_schedule = [30, 60]  # seconds to wait after 1st and 2nd failures
-
-    for attempt in range(3):
-        # Enforce minimum interval between calls
-        elapsed = time.time() - _last_call_time
-        if elapsed < MIN_CALL_INTERVAL:
-            delay = MIN_CALL_INTERVAL - elapsed
-            logger.debug("Rate limit: sleeping %.1fs before Garmin API call", delay)
-            time.sleep(delay)
-
-        try:
-            _last_call_time = time.time()
-            return func(*args, **kwargs)
-        except requests.exceptions.Timeout as e:
-            if attempt < 2:
-                wait = backoff_schedule[attempt]
-                logger.warning("Garmin timeout (attempt %d/3), waiting %ds", attempt + 1, wait)
-                time.sleep(wait)
-            else:
-                raise GarminRateLimitError("Garmin timeout after 3 attempts") from e
-        except Exception as e:
-            if not _is_rate_limit(e):
-                raise
-            if attempt < 2:
-                wait = backoff_schedule[attempt]
-                logger.warning("Garmin 429 (attempt %d/3), waiting %ds", attempt + 1, wait)
-                time.sleep(wait)
-            else:
-                raise GarminRateLimitError("Garmin rate limit (429) after 3 attempts") from e
-
-
-async def rate_limited_call(func, *args, **kwargs):
-    """Async wrapper that serializes Garmin API calls through a semaphore.
-
-    Use this from async endpoints instead of calling _call_with_retry directly.
-    Keeps the event loop free while waiting for the rate limit interval.
-    """
-    async with _rate_semaphore:
-        global _last_call_time
-        elapsed = time.time() - _last_call_time
-        if elapsed < MIN_CALL_INTERVAL:
-            await asyncio.sleep(MIN_CALL_INTERVAL - elapsed)
-        return await asyncio.to_thread(_call_with_retry, func, *args, **kwargs)
-
-
-def fetch_activities(days: int = 3, limit: int = 50) -> list[dict]:
-    """Fetch activity list from the last N days."""
-    client = get_garth_client()
-
-    activities = _call_with_retry(
-        client.connectapi,
-        "/activitylist-service/activities/search/activities",
-        params={
-            "start": 0,
-            "limit": limit,
-            "startDate": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),
-            "endDate": datetime.now().strftime("%Y-%m-%d"),
-        },
-    )
-    logger.info("Fetched %d activities from last %d days", len(activities), days)
-    return activities
-
-
-def fetch_activity_details(activity_id: int) -> dict:
-    """Fetch full details for a single activity."""
-    client = get_garth_client()
-
-    details = _call_with_retry(
-        client.connectapi, f"/activity-service/activity/{activity_id}"
-    )
-
-    # Splits / laps
-    try:
-        splits = _call_with_retry(
-            client.connectapi,
-            f"/activity-service/activity/{activity_id}/splits",
-        )
-        details["splits"] = splits
-    except Exception:
-        details["splits"] = None
-
-    # HR time in zones
-    try:
-        hr_zones = _call_with_retry(
-            client.connectapi,
-            f"/activity-service/activity/{activity_id}/hrTimeInZones",
-        )
-        details["hrTimeInZones"] = hr_zones
-    except Exception:
-        details["hrTimeInZones"] = None
-
-    # Power time in zones
-    try:
-        power_zones = _call_with_retry(
-            client.connectapi,
-            f"/activity-service/activity/{activity_id}/powerTimeInZones",
-        )
-        details["powerTimeInZones"] = power_zones
-    except Exception:
-        details["powerTimeInZones"] = None
-
-    return details

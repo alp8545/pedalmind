@@ -18,7 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError, API_TEST_URL, reset_auth_backoff
+from app.core.security import get_current_user
+from app.core.garth_client import (
+    async_fetch_activities, async_fetch_activity_details,
+    garmin_api_call, get_bootstrap_debug,
+    GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
+)
 from app.models.database import Activity, AthleteProfile
 
 logger = logging.getLogger(__name__)
@@ -221,46 +226,18 @@ async def garmin_debug():
         api_test["oauth2_token"] = {"error": str(e)}
         debug_log.append(f"[{_ts()}] Failed to read oauth2_token: {e}")
 
-    # --- Step 3: test API call to /userprofile-service/usersummary ---
-    profile_url = "/userprofile-service/usersummary"
-    debug_log.append(f"[{_ts()}] Testing GET {profile_url}...")
+    # --- Step 3: test API call via rate-limited path (BUG-14 fix) ---
+    debug_log.append(f"[{_ts()}] Testing GET {API_TEST_URL}?limit=1 (rate-limited)...")
     try:
-        profile = await asyncio.to_thread(client.connectapi, profile_url)
-        api_test["profile_test"] = {"status": "ok", "url": profile_url, "response_keys": list(profile.keys()) if isinstance(profile, dict) else str(type(profile))}
-        debug_log.append(f"[{_ts()}] Profile test OK, keys={list(profile.keys()) if isinstance(profile, dict) else '?'}")
-    except Exception as profile_err:
-        http_status = _get_http_status(profile_err)
-        api_test["profile_test"] = {"status": "failed", "url": profile_url, "http_status": http_status, "error": str(profile_err)}
-        debug_log.append(f"[{_ts()}] Profile test FAILED: HTTP {http_status} — {profile_err}")
-
-        # --- Step 4: on 401, try forced refresh and retry ---
-        if http_status == 401:
-            debug_log.append(f"[{_ts()}] Got 401, attempting forced refresh_oauth2()...")
-            try:
-                await asyncio.to_thread(client.client.refresh_oauth2)
-                debug_log.append(f"[{_ts()}] Refresh OK, retrying {profile_url}...")
-                profile = await asyncio.to_thread(client.connectapi, profile_url)
-                api_test["profile_test_after_refresh"] = {"status": "ok", "response_keys": list(profile.keys()) if isinstance(profile, dict) else str(type(profile))}
-                debug_log.append(f"[{_ts()}] Retry OK after refresh")
-            except Exception as retry_err:
-                api_test["profile_test_after_refresh"] = {"status": "failed", "error": str(retry_err)}
-                debug_log.append(f"[{_ts()}] Retry FAILED after refresh: {retry_err}")
-
-    # --- Step 5: test activitylist endpoint (proven working) ---
-    debug_log.append(f"[{_ts()}] Testing GET {API_TEST_URL}?limit=1...")
-    try:
-        activities = await asyncio.to_thread(
-            client.connectapi, API_TEST_URL, params={"limit": 1}
-        )
+        activities = await garmin_api_call(API_TEST_URL, params={"limit": 1})
         count = len(activities) if isinstance(activities, list) else "non-list"
         api_test["activity_test"] = {"status": "ok", "url": API_TEST_URL, "activities_returned": count}
         api_test["status"] = "ok"
         debug_log.append(f"[{_ts()}] Activity test OK, returned {count}")
     except Exception as act_err:
-        http_status = _get_http_status(act_err)
-        api_test["activity_test"] = {"status": "failed", "url": API_TEST_URL, "http_status": http_status, "error": str(act_err)}
+        api_test["activity_test"] = {"status": "failed", "url": API_TEST_URL, "error": str(act_err)}
         api_test["status"] = "activity_test_failed"
-        debug_log.append(f"[{_ts()}] Activity test FAILED: HTTP {http_status} — {act_err}")
+        debug_log.append(f"[{_ts()}] Activity test FAILED: {act_err}")
 
     result["api_test_result"] = api_test
     result["debug_log"] = debug_log
@@ -277,7 +254,7 @@ async def reset_garmin_auth():
 
 
 @router.post("/auth/inject-tokens")
-async def inject_garth_tokens(payload: dict):
+async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_user)):
     """Inject fresh garth tokens (base64-encoded bundle) into the running server.
 
     Use this when Garmin SSO is rate-limited but you have fresh tokens from
@@ -319,7 +296,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
     constants = await _get_athlete_constants(db)
 
     try:
-        activities = await asyncio.to_thread(fetch_activities, days=3, limit=5)
+        activities = await async_fetch_activities(days=3, limit=5)
     except GarminRateLimitError:
         logger.warning("Garmin rate limit on sync/last")
         raise HTTPException(
@@ -341,7 +318,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
         return {"message": "Attivita gia scaricata", "activity_id": activity_id, "skipped": True}
 
     try:
-        details = await asyncio.to_thread(fetch_activity_details, activity_id)
+        details = await async_fetch_activity_details(activity_id)
     except Exception as e:
         logger.exception("Failed to fetch activity details for %s", activity_id)
         raise HTTPException(status_code=502, detail=f"Errore download dettagli attivita: {e}")
@@ -370,7 +347,7 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
     days = weeks * 7
 
     try:
-        activities = await asyncio.to_thread(fetch_activities, days=days, limit=100)
+        activities = await async_fetch_activities(days=days, limit=100)
     except GarminRateLimitError:
         logger.warning("Garmin rate limit on sync/weeks/%d", weeks)
         raise HTTPException(
@@ -393,7 +370,7 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
             continue
 
         try:
-            details = await asyncio.to_thread(fetch_activity_details, activity_id)
+            details = await async_fetch_activity_details(activity_id)
             metrics = _compute_metrics(details, ftp=constants["ftp"])
 
             activity = Activity(

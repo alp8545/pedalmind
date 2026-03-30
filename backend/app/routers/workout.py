@@ -86,12 +86,6 @@ class WorkoutUploadRequest(BaseModel):
     workout: WorkoutStructured
 
 
-class WorkoutUploadResponse(BaseModel):
-    workout_id: str
-    scheduled: bool
-    schedule_date: Optional[str] = None
-
-
 # ---------------------------------------------------------------------------
 # AI system prompt
 # ---------------------------------------------------------------------------
@@ -372,59 +366,31 @@ async def interpret_workout(req: WorkoutInterpretRequest):
     return WorkoutStructured(**data)
 
 
-@router.post("/upload", response_model=WorkoutUploadResponse)
+class WorkoutUploadResponse(BaseModel):
+    workout_id: str
+    scheduled: bool
+    schedule_date: Optional[str] = None
+    garmin_uploaded: bool = True
+    garmin_error: Optional[str] = None
+
+
+@router.post("/upload")
 async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(get_db)):
-    """Convert structured workout to Garmin format, upload, and save to DB."""
+    """Save workout to DB, then attempt Garmin upload as best-effort.
+
+    The workout is ALWAYS saved locally (for Piano Settimanale) regardless
+    of whether Garmin upload succeeds. Garmin auth failures, 429s, and
+    network errors are caught and returned as a warning, not a 500.
+    """
     from garminconnect.workout import SportType
+    from app.models.database import ScheduledWorkout
 
     w = req.workout
 
     if w.sport not in ("cycling", "running"):
         raise HTTPException(status_code=400, detail=f"Unsupported sport: {w.sport}")
 
-    converted_steps = _convert_steps_to_dicts(w.steps)
-
-    sport_type_id = SportType.CYCLING if w.sport == "cycling" else SportType.RUNNING
-
-    workout_dict = {
-        "workoutName": w.name,
-        "sportType": {
-            "sportTypeId": sport_type_id,
-            "sportTypeKey": w.sport,
-        },
-        "estimatedDurationInSecs": w.estimated_duration_secs,
-        "workoutSegments": [
-            {
-                "segmentOrder": 1,
-                "sportType": {
-                    "sportTypeId": sport_type_id,
-                    "sportTypeKey": w.sport,
-                },
-                "workoutSteps": converted_steps,
-            }
-        ],
-    }
-
-    client = _get_garmin_client()
-
-    try:
-        result = client.upload_workout(workout_dict)
-    except Exception as exc:
-        logger.exception("Failed to upload workout to Garmin")
-        raise HTTPException(status_code=502, detail=f"Garmin upload failed: {exc}") from exc
-
-    workout_id = str(result.get("workoutId", result.get("id", "")))
-
-    scheduled = False
-    if w.schedule_date:
-        try:
-            client.schedule_workout(workout_id, w.schedule_date)
-            scheduled = True
-        except Exception as exc:
-            logger.warning("Workout uploaded but scheduling failed: %s", exc)
-
-    # Save to DB for Piano Settimanale display
-    from app.models.database import ScheduledWorkout
+    # 1. ALWAYS save to DB first (never fails due to Garmin issues)
     sw = ScheduledWorkout(
         name=w.name,
         sport=w.sport,
@@ -432,16 +398,69 @@ async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(g
         estimated_duration_secs=w.estimated_duration_secs,
         tss_estimate=w.tss_estimate,
         steps_json=[s.model_dump() for s in w.steps],
-        garmin_workout_id=workout_id,
-        uploaded=True,
+        uploaded=False,
     )
     db.add(sw)
     await db.commit()
+    await db.refresh(sw)
+
+    # 2. Attempt Garmin upload (best-effort)
+    garmin_workout_id = ""
+    garmin_uploaded = False
+    garmin_error = None
+    scheduled = False
+
+    try:
+        converted_steps = _convert_steps_to_dicts(w.steps)
+        sport_type_id = SportType.CYCLING if w.sport == "cycling" else SportType.RUNNING
+
+        workout_dict = {
+            "workoutName": w.name,
+            "sportType": {
+                "sportTypeId": sport_type_id,
+                "sportTypeKey": w.sport,
+            },
+            "estimatedDurationInSecs": w.estimated_duration_secs or 0,
+            "workoutSegments": [
+                {
+                    "segmentOrder": 1,
+                    "sportType": {
+                        "sportTypeId": sport_type_id,
+                        "sportTypeKey": w.sport,
+                    },
+                    "workoutSteps": converted_steps,
+                }
+            ],
+        }
+
+        client = _get_garmin_client()
+        result = client.upload_workout(workout_dict)
+        garmin_workout_id = str(result.get("workoutId", result.get("id", "")))
+        garmin_uploaded = True
+
+        # Try scheduling
+        if w.schedule_date:
+            try:
+                client.schedule_workout(garmin_workout_id, w.schedule_date)
+                scheduled = True
+            except Exception as exc:
+                logger.warning("Workout uploaded but scheduling failed: %s", exc)
+
+        # Update DB record with Garmin ID
+        sw.garmin_workout_id = garmin_workout_id
+        sw.uploaded = True
+        await db.commit()
+
+    except Exception as exc:
+        garmin_error = str(exc)
+        logger.warning("Garmin upload failed (workout saved locally): %s", exc)
 
     return WorkoutUploadResponse(
-        workout_id=workout_id,
+        workout_id=sw.id,
         scheduled=scheduled,
         schedule_date=w.schedule_date if scheduled else None,
+        garmin_uploaded=garmin_uploaded,
+        garmin_error=garmin_error,
     )
 
 

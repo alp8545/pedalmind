@@ -6,6 +6,7 @@ activities table. No OAuth required — uses GARMIN_EMAIL/PASSWORD env vars.
 """
 
 import asyncio
+import json
 import logging
 import os
 import traceback

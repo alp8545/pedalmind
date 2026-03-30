@@ -269,12 +269,21 @@ async def async_fetch_activity_details(activity_id: int) -> dict:
     return details
 
 
+def _get_garmin_connect_client():
+    """Get a garminconnect.Garmin client backed by the current garth session."""
+    from garminconnect import Garmin
+    _ensure_auth()
+    client = Garmin()
+    client.garth = garth.client
+    return client
+
+
 async def async_upload_workout(workout_dict: dict) -> dict:
     """Upload a workout to Garmin Connect."""
     async with _garmin_lock:
         def _upload():
-            _ensure_auth()
-            return garth.client.upload_workout(workout_dict)
+            client = _get_garmin_connect_client()
+            return client.upload_workout(workout_dict)
         return await asyncio.to_thread(_upload)
 
 
@@ -282,8 +291,8 @@ async def async_schedule_workout(workout_id: str, date_str: str):
     """Schedule a workout on Garmin Connect."""
     async with _garmin_lock:
         def _schedule():
-            _ensure_auth()
-            garth.client.schedule_workout(workout_id, date_str)
+            client = _get_garmin_connect_client()
+            client.schedule_workout(workout_id, date_str)
         return await asyncio.to_thread(_schedule)
 
 

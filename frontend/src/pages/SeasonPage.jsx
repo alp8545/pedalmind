@@ -13,22 +13,45 @@ const PRI_COLORS = { A: '#f59e0b', B: '#22d3ee', C: '#8b5cf6' }
 const DAY_LABELS = ['L', 'M', 'M', 'G', 'V', 'S', 'D']
 const DAY_NAMES = ['Lunedi', 'Martedi', 'Mercoledi', 'Giovedi', 'Venerdi', 'Sabato', 'Domenica']
 
-const STEP_TYPE_COLORS = {
-  'power.zone': '#f59e0b',
-  'power.range': '#f59e0b',
-  'heart.rate.zone': '#ef4444',
+// Zone colors: Z1=gray Z2=blue Z3=green Z4=amber Z5=orange Z6=red Z7=purple
+const ZONE_COLORS = ['#475569', '#3b82f6', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#8b5cf6']
+const FTP = 265
+
+function zoneColor(step) {
+  if (!step.target) return '#334155'
+  const t = step.target
+  if (t.type === 'power.zone') {
+    const z = t.value || 1
+    return ZONE_COLORS[Math.min(z - 1, 6)] || '#475569'
+  }
+  if (t.type === 'power.range') {
+    const avg = ((t.value_low || 0) + (t.value_high || 0)) / 2
+    const pct = avg / FTP
+    if (pct < 0.55) return ZONE_COLORS[0]  // Z1
+    if (pct < 0.75) return ZONE_COLORS[1]  // Z2
+    if (pct < 0.90) return ZONE_COLORS[2]  // Z3
+    if (pct < 1.05) return ZONE_COLORS[3]  // Z4
+    if (pct < 1.20) return ZONE_COLORS[4]  // Z5
+    if (pct < 1.50) return ZONE_COLORS[5]  // Z6
+    return ZONE_COLORS[6]                   // Z7
+  }
+  if (t.type === 'heart.rate.zone') return '#ef4444'
+  return '#475569'
 }
 
 function formatDuration(secs) {
   if (!secs) return ''
-  const m = Math.floor(secs / 60)
-  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 > 0 ? m % 60 + 'm' : ''}` : `${m}m`
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = Math.round(secs % 60)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 function StepBar({ step, totalSecs }) {
   const pct = totalSecs > 0 ? Math.max((step.duration_secs || 0) / totalSecs * 100, 4) : 10
-  const color = step.target ? (STEP_TYPE_COLORS[step.target.type] || '#64748b') : '#334155'
-  const isRecovery = step.target?.type === 'power.zone' && step.target?.value <= 2
+  const color = zoneColor(step)
+  const isRecovery = step.target?.type === 'power.zone' && (step.target?.value || 0) <= 2
 
   return (
     <div title={step.description || ''}
@@ -37,10 +60,10 @@ function StepBar({ step, totalSecs }) {
         width: `${pct}%`,
         minWidth: 6,
         height: isRecovery ? 16 : 28,
-        background: isRecovery ? `${color}30` : `${color}90`,
+        background: isRecovery ? `${color}40` : color,
       }}>
       {step.duration_secs >= 300 && (
-        <span className="font-mono text-white/70 leading-none" style={{ fontSize: 7 }}>
+        <span className="font-mono text-white/80 leading-none" style={{ fontSize: 7 }}>
           {formatDuration(step.duration_secs)}
         </span>
       )}
@@ -124,20 +147,23 @@ function WorkoutStepDetail({ step, index }) {
   const cadence = step.cadence
   const cadenceText = cadence ? `${cadence.low}-${cadence.high}rpm` : ''
 
+  const color = zoneColor(step)
+
   return (
     <div className="flex items-center gap-3 py-1 border-b border-slate-700/20 last:border-0">
-      <span className="font-mono text-slate-500 w-10 text-right" style={{ fontSize: 11 }}>
+      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
+      <span className="font-mono text-slate-400 w-12 text-right flex-shrink-0" style={{ fontSize: 11 }}>
         {formatDuration(step.duration_secs)}
       </span>
-      <span className="font-mono font-semibold text-amber-400" style={{ fontSize: 12 }}>
+      <span className="font-mono font-semibold flex-shrink-0" style={{ fontSize: 12, color }}>
         {targetText || '—'}
       </span>
       {cadenceText && (
-        <span className="font-mono text-cyan-400/70" style={{ fontSize: 10 }}>
+        <span className="font-mono text-cyan-400/60" style={{ fontSize: 10 }}>
           {cadenceText}
         </span>
       )}
-      <span className="font-mono text-slate-400 flex-1 text-right" style={{ fontSize: 10 }}>
+      <span className="font-mono text-slate-500 flex-1 text-right truncate" style={{ fontSize: 10 }}>
         {step.description || ''}
       </span>
     </div>

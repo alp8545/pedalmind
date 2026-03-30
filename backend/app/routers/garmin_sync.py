@@ -270,12 +270,46 @@ async def garmin_debug():
 
 @router.post("/auth/reset")
 async def reset_garmin_auth():
-    """Reset Garmin auth backoff and force re-authentication on next request.
-
-    Use this after Garmin's rate limit has cleared (wait at least 30 minutes).
-    """
+    """Reset Garmin auth backoff and force re-authentication on next request."""
     reset_auth_backoff()
     return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
+
+
+@router.post("/auth/inject-tokens")
+async def inject_garth_tokens(payload: dict):
+    """Inject fresh garth tokens (base64-encoded bundle) into the running server.
+
+    Use this when Garmin SSO is rate-limited but you have fresh tokens from
+    a local machine where refresh_oauth2() succeeded.
+
+    POST body: {"tokens": "<base64-encoded garth token bundle>"}
+    """
+    import base64
+    tokens_b64 = payload.get("tokens", "")
+    if not tokens_b64:
+        raise HTTPException(status_code=400, detail="Missing 'tokens' field (base64-encoded)")
+
+    try:
+        bundle = json.loads(base64.b64decode(tokens_b64))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64/JSON: {e}")
+
+    from app.core.garth_client import _TOKEN_DIR, reset_auth_backoff
+    _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+    for fname, content in bundle.items():
+        (_TOKEN_DIR / fname).write_text(json.dumps(content))
+
+    reset_auth_backoff()
+
+    # Resume garth with the new tokens
+    import garth
+    garth.resume(str(_TOKEN_DIR))
+
+    return {
+        "message": "Tokens injected and session resumed",
+        "access_token_expired": garth.client.oauth2_token.expired,
+        "expires_at": garth.client.oauth2_token.expires_at,
+    }
 
 
 @router.post("/sync/last")

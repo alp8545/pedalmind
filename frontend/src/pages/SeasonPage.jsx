@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
 import { G, Label } from '../components/ui'
 import DonutRing from '../components/charts/DonutRing'
 
@@ -9,6 +10,225 @@ const PHASES = [
 ]
 
 const PRI_COLORS = { A: '#f59e0b', B: '#22d3ee', C: '#8b5cf6' }
+const DAY_LABELS = ['L', 'M', 'M', 'G', 'V', 'S', 'D']
+const DAY_NAMES = ['Lunedi', 'Martedi', 'Mercoledi', 'Giovedi', 'Venerdi', 'Sabato', 'Domenica']
+
+const STEP_TYPE_COLORS = {
+  'power.zone': '#f59e0b',
+  'power.range': '#f59e0b',
+  'heart.rate.zone': '#ef4444',
+}
+
+function formatDuration(secs) {
+  if (!secs) return ''
+  const m = Math.floor(secs / 60)
+  return m >= 60 ? `${Math.floor(m / 60)}h${m % 60 > 0 ? m % 60 + 'm' : ''}` : `${m}m`
+}
+
+function StepBar({ step, totalSecs }) {
+  const pct = totalSecs > 0 ? Math.max((step.duration_secs || 0) / totalSecs * 100, 4) : 10
+  const color = step.target ? (STEP_TYPE_COLORS[step.target.type] || '#64748b') : '#334155'
+  const isRecovery = step.target?.type === 'power.zone' && step.target?.value <= 2
+
+  return (
+    <div title={step.description || ''}
+      className="rounded-sm flex items-end justify-center overflow-hidden"
+      style={{
+        width: `${pct}%`,
+        minWidth: 6,
+        height: isRecovery ? 16 : 28,
+        background: isRecovery ? `${color}30` : `${color}90`,
+      }}>
+      {step.duration_secs >= 300 && (
+        <span className="font-mono text-white/70 leading-none" style={{ fontSize: 7 }}>
+          {formatDuration(step.duration_secs)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function WorkoutCard({ workout, onToggle, expanded }) {
+  // Flatten steps for the visual bar
+  const flatSteps = []
+  const totalSecs = workout.estimated_duration_secs || 0
+  for (const step of (workout.steps || [])) {
+    if (step.type === 'repeat') {
+      for (let i = 0; i < (step.iterations || 1); i++) {
+        for (const sub of (step.steps || [])) flatSteps.push(sub)
+      }
+    } else {
+      flatSteps.push(step)
+    }
+  }
+
+  return (
+    <div className="mb-1.5">
+      <button onClick={onToggle} className="w-full text-left">
+        <G className="!p-3 transition-colors hover:bg-white/[0.02]"
+          style={expanded ? { border: '1px solid rgba(245,158,11,0.2)' } : {}}>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="font-mono font-semibold text-slate-50 text-sm">{workout.name}</span>
+            <div className="flex items-center gap-2">
+              {workout.tss_estimate && (
+                <span className="font-mono text-amber-500" style={{ fontSize: 11 }}>
+                  TSS {workout.tss_estimate}
+                </span>
+              )}
+              <span className="font-mono text-slate-500" style={{ fontSize: 11 }}>
+                {formatDuration(totalSecs)}
+              </span>
+            </div>
+          </div>
+          {/* Visual step composition bar */}
+          <div className="flex gap-px items-end" style={{ height: 28 }}>
+            {flatSteps.map((s, i) => <StepBar key={i} step={s} totalSecs={totalSecs} />)}
+          </div>
+        </G>
+      </button>
+
+      {/* Expanded detail view */}
+      {expanded && (
+        <div className="mt-1 mx-1 rounded-lg p-3" style={{ background: 'rgba(15,23,42,0.6)' }}>
+          {(workout.steps || []).map((step, i) => (
+            <WorkoutStepDetail key={i} step={step} index={i} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WorkoutStepDetail({ step, index }) {
+  if (step.type === 'repeat') {
+    return (
+      <div className="mb-2">
+        <div className="font-mono text-amber-400 mb-1" style={{ fontSize: 11 }}>
+          {step.iterations}x Ripetizioni
+        </div>
+        <div className="ml-3 border-l border-amber-500/20 pl-2">
+          {(step.steps || []).map((s, i) => (
+            <WorkoutStepDetail key={i} step={s} index={i} />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const target = step.target
+  let targetText = ''
+  if (target?.type === 'power.zone') targetText = `Z${target.value}`
+  else if (target?.type === 'power.range') targetText = `${target.value_low}-${target.value_high}W`
+  else if (target?.type === 'heart.rate.zone') targetText = `HR Z${target.value}`
+
+  const cadence = step.cadence
+  const cadenceText = cadence ? `${cadence.low}-${cadence.high}rpm` : ''
+
+  return (
+    <div className="flex items-center gap-3 py-1 border-b border-slate-700/20 last:border-0">
+      <span className="font-mono text-slate-500 w-10 text-right" style={{ fontSize: 11 }}>
+        {formatDuration(step.duration_secs)}
+      </span>
+      <span className="font-mono font-semibold text-amber-400" style={{ fontSize: 12 }}>
+        {targetText || '—'}
+      </span>
+      {cadenceText && (
+        <span className="font-mono text-cyan-400/70" style={{ fontSize: 10 }}>
+          {cadenceText}
+        </span>
+      )}
+      <span className="font-mono text-slate-400 flex-1 text-right" style={{ fontSize: 10 }}>
+        {step.description || ''}
+      </span>
+    </div>
+  )
+}
+
+function WeekPlan() {
+  const [workouts, setWorkouts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expandedId, setExpandedId] = useState(null)
+
+  useEffect(() => {
+    api('/api/garmin/workout/week')
+      .then(data => setWorkouts(data.workouts || []))
+      .catch(() => setWorkouts([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  // Group workouts by day of week (0=Mon ... 6=Sun)
+  const byDay = {}
+  for (const w of workouts) {
+    if (w.schedule_date) {
+      const d = new Date(w.schedule_date)
+      const dow = (d.getDay() + 6) % 7 // Mon=0
+      if (!byDay[dow]) byDay[dow] = []
+      byDay[dow].push(w)
+    }
+  }
+
+  const hasWorkouts = workouts.length > 0
+
+  return (
+    <G>
+      <Label>Piano Settimanale</Label>
+
+      {loading ? (
+        <div className="text-center py-4">
+          <span className="font-mono text-slate-500 text-xs">Caricamento...</span>
+        </div>
+      ) : !hasWorkouts ? (
+        <div className="text-center py-4">
+          <p className="text-slate-400 text-sm mb-2">Nessun workout questa settimana</p>
+          <p className="font-mono text-slate-500" style={{ fontSize: 11 }}>
+            Carica un workout dalla Dashboard con una data per vederlo qui
+          </p>
+          {/* Empty day indicators */}
+          <div className="flex items-center justify-center gap-1 mt-3">
+            {DAY_LABELS.map((d, i) => (
+              <div key={i} className="w-8 h-8 rounded-lg flex items-center justify-center font-mono"
+                style={{ fontSize: 12, background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.06)' }}>
+                <span className="text-slate-400">{d}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2">
+          {/* Day header row */}
+          <div className="flex gap-1 mb-2">
+            {DAY_LABELS.map((d, i) => {
+              const has = byDay[i]?.length > 0
+              return (
+                <div key={i} className="flex-1 text-center">
+                  <div className={`font-mono rounded-md py-1 ${has ? 'bg-amber-500/15 text-amber-400' : 'text-slate-500'}`}
+                    style={{ fontSize: 11 }}>{d}</div>
+                </div>
+              )
+            })}
+          </div>
+          {/* Workouts listed by day */}
+          {[0, 1, 2, 3, 4, 5, 6].map(dow => {
+            const dayWorkouts = byDay[dow]
+            if (!dayWorkouts) return null
+            return (
+              <div key={dow}>
+                <div className="font-mono text-slate-500 mb-1 mt-2" style={{ fontSize: 10 }}>
+                  {DAY_NAMES[dow].toUpperCase()}
+                </div>
+                {dayWorkouts.map(w => (
+                  <WorkoutCard key={w.id} workout={w}
+                    expanded={expandedId === w.id}
+                    onToggle={() => setExpandedId(expandedId === w.id ? null : w.id)} />
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </G>
+  )
+}
 
 export default function SeasonPage() {
   const [races, setRaces] = useState([])
@@ -155,24 +375,8 @@ export default function SeasonPage() {
         )}
       </div>
 
-      {/* Week plan — linked to "Crea workout" */}
-      <G>
-        <Label>Piano Settimanale</Label>
-        <div className="text-center py-6">
-          <p className="text-slate-400 text-sm mb-2">Nessun piano per questa settimana</p>
-          <p className="font-mono text-slate-400 mb-4" style={{ fontSize: 12 }}>
-            Usa &quot;Carica workout&quot; dalla Dashboard per creare il piano
-          </p>
-          <div className="flex items-center justify-center gap-1 text-amber-500/40">
-            {['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((d, i) => (
-              <div key={i} className="w-8 h-8 rounded-lg flex items-center justify-center font-mono"
-                style={{ fontSize: 12, background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.06)' }}>
-                <span className="text-slate-400">{d}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </G>
+      {/* Piano Settimanale */}
+      <WeekPlan />
     </div>
   )
 }

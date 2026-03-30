@@ -109,6 +109,30 @@ class Activity(Base):
     )
 
 
+class ScheduledWorkout(Base):
+    """Workout created via interpreter and optionally uploaded to Garmin.
+
+    Stores the full structured workout for display in the Piano Settimanale.
+    """
+    __tablename__ = "scheduled_workouts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sport: Mapped[str] = mapped_column(String(20), default="cycling")
+    schedule_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # YYYY-MM-DD
+    estimated_duration_secs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tss_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    steps_json: Mapped[dict] = mapped_column(JSON, nullable=False)  # full WorkoutStructured.steps
+    garmin_workout_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    uploaded: Mapped[bool] = mapped_column(default=False)
+    completed: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_scheduled_workouts_date", "schedule_date"),
+    )
+
+
 class ChatConversation(Base):
     __tablename__ = "chat_conversations"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)

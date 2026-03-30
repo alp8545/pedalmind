@@ -10,8 +10,12 @@ import logging
 from typing import Optional
 
 import anthropic
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
 
 from app.core.config import settings
 
@@ -89,12 +93,12 @@ You are a cycling/running workout interpreter. Convert natural language workout 
 - "VO2max" = Z5 = 278-318W
 - "Endurance" / "fondo" = Z2
 - "Recupero" = Z1
-- "sotto soglia" with specific W → power.range centered on that W (±5W)
-- "Zona bassa" modifier → lower limit of zone + 20W (±10W range)
-- "Zona alta" modifier → upper limit of zone - 20W (±10W range)
+- "sotto soglia" with specific W → power.range centered on that W (±10W)
+- "Zona bassa" / "Z{n} bassa" modifier → lower limit of zone as value_low, +20W as value_high. Example: "Z5 bassa" → power.range value_low=278, value_high=298 (bottom of Z5 + 20W)
+- "Zona alta" / "Z{n} alta" modifier → upper limit of zone as value_high, -20W as value_low. Example: "Z5 alta" → power.range value_low=298, value_high=318 (top of Z5 - 20W)
 - "rapporto lungo" = low cadence 65-80rpm
 - "rapporto agile" = high cadence 90-100rpm
-- If a single watt value is given (e.g. "230W"), use power.range with ±5W
+- If a single watt value is given (e.g. "250W"), use power.range with ±10W (e.g. value_low=240, value_high=260)
 - If a zone is given (e.g. "Z3"), use power.zone with value=3
 
 ## Cadence Rules (cycling only)
@@ -352,14 +356,8 @@ async def interpret_workout(req: WorkoutInterpretRequest):
 
 
 @router.post("/upload", response_model=WorkoutUploadResponse)
-async def upload_workout(req: WorkoutUploadRequest):
-    """Convert structured workout to Garmin format and upload.
-
-    Builds raw dicts matching Garmin's real API format (power zones as primary
-    target with zoneNumber, cadence as secondary target with
-    secondaryTargetValueOne/Two). Bypasses garminconnect's limited Pydantic
-    models to support the full Garmin workout specification.
-    """
+async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(get_db)):
+    """Convert structured workout to Garmin format, upload, and save to DB."""
     from garminconnect.workout import SportType
 
     w = req.workout
@@ -371,7 +369,6 @@ async def upload_workout(req: WorkoutUploadRequest):
 
     sport_type_id = SportType.CYCLING if w.sport == "cycling" else SportType.RUNNING
 
-    # Build the raw workout dict matching Garmin's API format exactly
     workout_dict = {
         "workoutName": w.name,
         "sportType": {
@@ -394,7 +391,6 @@ async def upload_workout(req: WorkoutUploadRequest):
     client = _get_garmin_client()
 
     try:
-        # Use upload_workout with raw dict to preserve all fields
         result = client.upload_workout(workout_dict)
     except Exception as exc:
         logger.exception("Failed to upload workout to Garmin")
@@ -410,8 +406,101 @@ async def upload_workout(req: WorkoutUploadRequest):
         except Exception as exc:
             logger.warning("Workout uploaded but scheduling failed: %s", exc)
 
+    # Save to DB for Piano Settimanale display
+    from app.models.database import ScheduledWorkout
+    sw = ScheduledWorkout(
+        name=w.name,
+        sport=w.sport,
+        schedule_date=w.schedule_date,
+        estimated_duration_secs=w.estimated_duration_secs,
+        tss_estimate=w.tss_estimate,
+        steps_json=[s.model_dump() for s in w.steps],
+        garmin_workout_id=workout_id,
+        uploaded=True,
+    )
+    db.add(sw)
+    await db.commit()
+
     return WorkoutUploadResponse(
         workout_id=workout_id,
         scheduled=scheduled,
         schedule_date=w.schedule_date if scheduled else None,
     )
+
+
+@router.get("/week")
+async def get_week_workouts(
+    start_date: str = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """List scheduled workouts for a given week (Mon-Sun).
+
+    If start_date not provided, returns current week.
+    """
+    from datetime import date, timedelta
+    from app.models.database import ScheduledWorkout
+
+    if start_date:
+        monday = date.fromisoformat(start_date)
+    else:
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+
+    sunday = monday + timedelta(days=6)
+
+    result = await db.execute(
+        select(ScheduledWorkout)
+        .where(
+            ScheduledWorkout.schedule_date >= monday.isoformat(),
+            ScheduledWorkout.schedule_date <= sunday.isoformat(),
+        )
+        .order_by(ScheduledWorkout.schedule_date)
+    )
+    workouts = result.scalars().all()
+
+    return {
+        "week_start": monday.isoformat(),
+        "week_end": sunday.isoformat(),
+        "workouts": [
+            {
+                "id": w.id,
+                "name": w.name,
+                "sport": w.sport,
+                "schedule_date": w.schedule_date,
+                "estimated_duration_secs": w.estimated_duration_secs,
+                "tss_estimate": w.tss_estimate,
+                "steps": w.steps_json,
+                "uploaded": w.uploaded,
+                "completed": w.completed,
+                "garmin_workout_id": w.garmin_workout_id,
+            }
+            for w in workouts
+        ],
+    }
+
+
+@router.get("/{workout_id}")
+async def get_workout_detail(workout_id: str, db: AsyncSession = Depends(get_db)):
+    """Get full workout details including steps."""
+    from app.models.database import ScheduledWorkout
+
+    result = await db.execute(
+        select(ScheduledWorkout).where(ScheduledWorkout.id == workout_id)
+    )
+    w = result.scalar_one_or_none()
+    if not w:
+        raise HTTPException(status_code=404, detail="Workout non trovato")
+
+    return {
+        "id": w.id,
+        "name": w.name,
+        "sport": w.sport,
+        "schedule_date": w.schedule_date,
+        "estimated_duration_secs": w.estimated_duration_secs,
+        "tss_estimate": w.tss_estimate,
+        "steps": w.steps_json,
+        "uploaded": w.uploaded,
+        "completed": w.completed,
+        "garmin_workout_id": w.garmin_workout_id,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+    }

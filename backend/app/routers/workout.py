@@ -56,13 +56,30 @@ class WorkoutStep(BaseModel):
     steps: Optional[list["WorkoutStep"]] = None  # for repeat
 
 
+def _compute_total_duration(steps: list) -> int:
+    """Sum up total duration from workout steps, expanding repeats."""
+    total = 0
+    for step in steps:
+        if step.type == "repeat":
+            sub_dur = _compute_total_duration(step.steps or [])
+            total += sub_dur * (step.iterations or 1)
+        else:
+            total += step.duration_secs or 0
+    return total
+
+
 class WorkoutStructured(BaseModel):
     name: str
     sport: str
-    estimated_duration_secs: int
+    estimated_duration_secs: Optional[int] = None
     tss_estimate: Optional[int] = None
     schedule_date: Optional[str] = None
     steps: list[WorkoutStep]
+
+    def model_post_init(self, __context):
+        """Compute estimated_duration_secs from steps if AI didn't provide it."""
+        if not self.estimated_duration_secs and self.steps:
+            self.estimated_duration_secs = _compute_total_duration(self.steps)
 
 
 class WorkoutUploadRequest(BaseModel):

@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError, API_TEST_URL
+from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError, API_TEST_URL, reset_auth_backoff
 from app.models.database import Activity, AthleteProfile
 
 logger = logging.getLogger(__name__)
@@ -266,6 +266,16 @@ async def garmin_debug():
     result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
 
     return result
+
+
+@router.post("/auth/reset")
+async def reset_garmin_auth():
+    """Reset Garmin auth backoff and force re-authentication on next request.
+
+    Use this after Garmin's rate limit has cleared (wait at least 30 minutes).
+    """
+    reset_auth_backoff()
+    return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
 
 
 @router.post("/sync/last")

@@ -32,7 +32,11 @@ _last_call_time = 0.0
 _TOKEN_DIR = Path("/tmp/garth_tokens")
 _bootstrap_log: list[str] = []  # debug breadcrumbs for /garmin/debug endpoint
 _auth_failure_until: float = 0  # epoch timestamp — skip auth attempts until this time
-_AUTH_BACKOFF_SECS = 300  # 5 min backoff after auth failure to avoid Garmin 429 spiral
+_auth_failure_count: int = 0  # consecutive auth failures — longer backoff after repeated failures
+_AUTH_BACKOFF_BASE = 300  # 5 min base backoff
+_AUTH_BACKOFF_MAX = 3600  # 1 hour max backoff
+_REFRESH_BUFFER_SECS = 300  # refresh 5 minutes BEFORE expiry to avoid last-second failures
+_client_ready: bool = False  # True when we have a working session, skip re-auth
 
 
 def _decode_garth_tokens() -> bool:
@@ -87,25 +91,49 @@ def _test_api_call() -> tuple[str, dict | list | None, Exception | None]:
         return ("error", None, e)
 
 
+def _engage_backoff(reason: str):
+    """Set auth backoff with exponential increase on repeated failures."""
+    global _auth_failure_until, _auth_failure_count
+    _auth_failure_count += 1
+    backoff = min(_AUTH_BACKOFF_BASE * (2 ** (_auth_failure_count - 1)), _AUTH_BACKOFF_MAX)
+    _auth_failure_until = time.time() + backoff
+    _bootstrap_log.append(f"Auth backoff #{_auth_failure_count}: {backoff}s. Reason: {reason}")
+
+
+def _needs_refresh() -> bool:
+    """Check if the access token needs refreshing (expired or about to expire)."""
+    if not hasattr(garth.client, "oauth2_token") or garth.client.oauth2_token is None:
+        return True
+    expires_at = garth.client.oauth2_token.expires_at
+    return expires_at < (time.time() + _REFRESH_BUFFER_SECS)
+
+
 def get_garth_client():
     """Login to Garmin Connect via garth, reuse session if possible.
 
-    Priority:
-    1. Decode GARTH_TOKENS env var to disk (if set)
-    2. Resume from token files on disk
-    3. If resume succeeds but API returns 401, try refresh_oauth2
-    4. If refresh fails, try fresh login with GARMIN_EMAIL/PASSWORD
+    Key design: avoid the 429 spiral.
+    1. If we already have a working session (_client_ready), reuse it. Only refresh
+       if the token is about to expire (5 min buffer).
+    2. On auth failure, use exponential backoff (5min → 10min → 20min → ... → 1hr max).
+    3. NEVER attempt fresh login as fallback to a 429'd refresh. That just 429s a
+       second endpoint. Only do fresh login when there are no tokens at all.
+    4. Reset backoff on ANY successful auth.
     """
-    global _auth_failure_until
+    global _auth_failure_until, _auth_failure_count, _client_ready
+
+    # Fast path: session already working and token not about to expire
+    if _client_ready and not _needs_refresh():
+        return garth
 
     # If we recently failed auth, don't hammer Garmin again
     if _auth_failure_until > time.time():
         wait = int(_auth_failure_until - time.time())
         raise RuntimeError(
-            f"Garmin auth is in backoff mode (retry in {wait}s) to avoid 429 rate-limit spiral"
+            f"Garmin auth is in backoff mode (retry in {wait}s). "
+            f"Failure #{_auth_failure_count}. Next attempt at backoff expiry."
         )
 
-    # Always try to decode env var first — tokens may have been refreshed
+    # Decode GARTH_TOKENS env var to disk on first run
     if not _TOKEN_DIR.exists():
         _decode_garth_tokens()
 
@@ -114,73 +142,60 @@ def get_garth_client():
         try:
             garth.resume(str(_TOKEN_DIR))
             _bootstrap_log.append(f"Resumed garth session from {_TOKEN_DIR}")
-
-            # Only refresh if token is actually expired
-            if garth.client.oauth2_token.expired:
-                _bootstrap_log.append(f"Access token expired (expires_at={garth.client.oauth2_token.expires_at}), attempting refresh_oauth2...")
-                try:
-                    garth.client.refresh_oauth2()
-                    garth.save(str(_TOKEN_DIR))
-                    _bootstrap_log.append("Token refresh succeeded, saved to disk")
-                except Exception as refresh_err:
-                    _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
-                    if settings.GARMIN_EMAIL and settings.GARMIN_PASSWORD:
-                        _bootstrap_log.append("Attempting fresh login fallback...")
-                        try:
-                            garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
-                            garth.save(str(_TOKEN_DIR))
-                            _bootstrap_log.append("Fresh login fallback succeeded")
-                        except Exception as login_err:
-                            _bootstrap_log.append(f"Fresh login fallback failed: {login_err}")
-                            _auth_failure_until = time.time() + _AUTH_BACKOFF_SECS
-                            _bootstrap_log.append(f"Auth backoff engaged for {_AUTH_BACKOFF_SECS}s")
-                            raise RuntimeError(f"All auth methods failed. Refresh: {refresh_err}, Login: {login_err}")
-                    else:
-                        _auth_failure_until = time.time() + _AUTH_BACKOFF_SECS
-                        _bootstrap_log.append(f"Auth backoff engaged for {_AUTH_BACKOFF_SECS}s")
-                        raise RuntimeError(f"Token refresh failed and no GARMIN_EMAIL/PASSWORD for fallback: {refresh_err}")
-            else:
-                _bootstrap_log.append(f"Access token still valid (expires_at={garth.client.oauth2_token.expires_at}), skipping refresh")
-
-            # Verify API access with a real call
-            test_status, test_data, test_err = _test_api_call()
-            if test_status == "ok":
-                _bootstrap_log.append(f"API test OK via {API_TEST_URL}")
-            elif test_status == "401":
-                _bootstrap_log.append(f"API test got 401 (auth failed), attempting refresh_oauth2...")
-                try:
-                    garth.client.refresh_oauth2()
-                    garth.save(str(_TOKEN_DIR))
-                    _bootstrap_log.append("Post-401 refresh succeeded")
-                    retry_status, _, retry_err = _test_api_call()
-                    if retry_status == "ok":
-                        _bootstrap_log.append("API test OK after refresh")
-                    else:
-                        _bootstrap_log.append(f"API still failing after refresh: {retry_err}")
-                except Exception as refresh_err:
-                    _bootstrap_log.append(f"Post-401 refresh failed: {refresh_err}")
-            else:
-                # Non-auth error (404, 429, etc) — don't try refresh
-                _bootstrap_log.append(f"API test failed (non-auth error): {test_err}")
-
-            return garth
-        except RuntimeError:
-            raise
         except Exception as e:
             _bootstrap_log.append(f"Resume failed from {_TOKEN_DIR}: {e}")
+            # Fall through to fresh login below
 
-    # Fallback: fresh login
+        # Check if token needs refresh
+        if _needs_refresh():
+            _bootstrap_log.append(
+                f"Access token needs refresh (expires_at={garth.client.oauth2_token.expires_at})"
+            )
+            try:
+                garth.client.refresh_oauth2()
+                garth.save(str(_TOKEN_DIR))
+                _auth_failure_count = 0  # Reset on success
+                _client_ready = True
+                _bootstrap_log.append("Token refresh succeeded, saved to disk")
+                return garth
+            except Exception as refresh_err:
+                _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
+                # DO NOT try fresh login here — that just 429s a second endpoint.
+                # Instead, check if the old access token might still work (Garmin
+                # sometimes accepts tokens slightly past expiry).
+                test_status, _, _ = _test_api_call()
+                if test_status == "ok":
+                    _bootstrap_log.append("Old access token still works despite refresh failure")
+                    _client_ready = True
+                    return garth
+                # Both refresh and API failed — engage backoff
+                _engage_backoff(f"refresh failed: {refresh_err}")
+                raise RuntimeError(f"Token refresh failed: {refresh_err}")
+        else:
+            _bootstrap_log.append(
+                f"Access token still valid (expires_at={garth.client.oauth2_token.expires_at})"
+            )
+            _client_ready = True
+            return garth
+
+    # No tokens on disk — fresh login is the only option
     if not settings.GARMIN_EMAIL or not settings.GARMIN_PASSWORD:
         raise RuntimeError(
             "Cannot authenticate to Garmin: no GARTH_TOKENS, no saved tokens, "
             "and GARMIN_EMAIL/GARMIN_PASSWORD not set"
         )
-    _bootstrap_log.append("Attempting fresh login with GARMIN_EMAIL/PASSWORD...")
-    garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
-    _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-    garth.save(str(_TOKEN_DIR))
-    _bootstrap_log.append("Fresh login successful, tokens saved")
-    return garth
+    _bootstrap_log.append("No tokens found, attempting fresh login...")
+    try:
+        garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
+        _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+        garth.save(str(_TOKEN_DIR))
+        _auth_failure_count = 0
+        _client_ready = True
+        _bootstrap_log.append("Fresh login successful, tokens saved")
+        return garth
+    except Exception as login_err:
+        _engage_backoff(f"fresh login failed: {login_err}")
+        raise RuntimeError(f"Fresh login failed: {login_err}")
 
 
 def get_bootstrap_debug() -> dict:
@@ -216,6 +231,15 @@ def get_bootstrap_debug() -> dict:
         "token_details": token_details,
         "bootstrap_log": list(_bootstrap_log),
     }
+
+
+def reset_auth_backoff():
+    """Manually reset the auth backoff state. Use after Garmin rate limit clears."""
+    global _auth_failure_until, _auth_failure_count, _client_ready
+    _auth_failure_until = 0
+    _auth_failure_count = 0
+    _client_ready = False
+    _bootstrap_log.append("Auth backoff manually reset")
 
 
 class GarminRateLimitError(Exception):

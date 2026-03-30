@@ -5,6 +5,7 @@ Tokens can be injected via GARTH_TOKENS env var (base64-encoded bundle)
 for environments like Railway where filesystem state is ephemeral.
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import garth
+import requests.exceptions
 from garth.exc import GarthHTTPError
 
 from app.core.config import settings
@@ -21,6 +23,11 @@ from app.core.config import settings
 logger = logging.getLogger("garth_client")
 
 RATE_LIMIT_WAIT = 30  # seconds to wait on 429
+MIN_CALL_INTERVAL = 2.0  # seconds between Garmin API calls
+
+# Async rate limiter: serializes all Garmin API calls with a 2s floor
+_rate_semaphore = asyncio.Semaphore(1)
+_last_call_time = 0.0
 
 _TOKEN_DIR = Path("/tmp/garth_tokens")
 _bootstrap_log: list[str] = []  # debug breadcrumbs for /garmin/debug endpoint
@@ -226,20 +233,55 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _call_with_retry(func, *args, **kwargs):
-    """Call a garth API function; retry once after 30s on 429."""
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        if not _is_rate_limit(e):
-            raise
-        logger.warning("Garmin 429 rate limit hit, waiting %ds before retry", RATE_LIMIT_WAIT)
-        time.sleep(RATE_LIMIT_WAIT)
+    """Call a garth API function with rate limiting and exponential backoff.
+
+    Rate limit: enforces MIN_CALL_INTERVAL between calls.
+    Retry: on 429 or timeout, retries up to 3 attempts total with 30s/60s waits.
+    """
+    global _last_call_time
+    backoff_schedule = [30, 60]  # seconds to wait after 1st and 2nd failures
+
+    for attempt in range(3):
+        # Enforce minimum interval between calls
+        elapsed = time.time() - _last_call_time
+        if elapsed < MIN_CALL_INTERVAL:
+            delay = MIN_CALL_INTERVAL - elapsed
+            logger.debug("Rate limit: sleeping %.1fs before Garmin API call", delay)
+            time.sleep(delay)
+
         try:
+            _last_call_time = time.time()
             return func(*args, **kwargs)
-        except Exception as e2:
-            if _is_rate_limit(e2):
-                raise GarminRateLimitError("Garmin rate limit (429) after retry") from e2
-            raise
+        except requests.exceptions.Timeout as e:
+            if attempt < 2:
+                wait = backoff_schedule[attempt]
+                logger.warning("Garmin timeout (attempt %d/3), waiting %ds", attempt + 1, wait)
+                time.sleep(wait)
+            else:
+                raise GarminRateLimitError("Garmin timeout after 3 attempts") from e
+        except Exception as e:
+            if not _is_rate_limit(e):
+                raise
+            if attempt < 2:
+                wait = backoff_schedule[attempt]
+                logger.warning("Garmin 429 (attempt %d/3), waiting %ds", attempt + 1, wait)
+                time.sleep(wait)
+            else:
+                raise GarminRateLimitError("Garmin rate limit (429) after 3 attempts") from e
+
+
+async def rate_limited_call(func, *args, **kwargs):
+    """Async wrapper that serializes Garmin API calls through a semaphore.
+
+    Use this from async endpoints instead of calling _call_with_retry directly.
+    Keeps the event loop free while waiting for the rate limit interval.
+    """
+    async with _rate_semaphore:
+        global _last_call_time
+        elapsed = time.time() - _last_call_time
+        if elapsed < MIN_CALL_INTERVAL:
+            await asyncio.sleep(MIN_CALL_INTERVAL - elapsed)
+        return await asyncio.to_thread(_call_with_retry, func, *args, **kwargs)
 
 
 def fetch_activities(days: int = 3, limit: int = 50) -> list[dict]:

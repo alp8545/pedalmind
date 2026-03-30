@@ -3,12 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { G, Label, MetricCard } from '../components/ui'
-import PMChart from '../components/charts/PMChart'
-
-// Placeholder PMC data (until real historical TSS)
-const MOCK_CTL = [42,44,45,47,48,46,49,51,53,55,54,56,58,57,59,61,60,62,63,65,64,66,68,67,69,71,70,72,74,73]
-const MOCK_ATL = [50,55,60,52,48,65,70,58,55,72,68,60,75,70,65,80,72,68,78,75,70,82,78,72,85,80,75,88,82,78]
-const MOCK_TSB = MOCK_CTL.map((c, i) => c - MOCK_ATL[i])
+import TrendsChart from '../components/charts/TrendsChart'
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -23,6 +18,10 @@ export default function DashboardPage() {
   const [garminLoading, setGarminLoading] = useState(false)
   const [garminSyncing, setGarminSyncing] = useState(null)
   const [analyzing, setAnalyzing] = useState(null)
+
+  const [trends, setTrends] = useState(null)
+  const [trendsLoading, setTrendsLoading] = useState(true)
+  const [trendsDays, setTrendsDays] = useState(30)
 
   const [workoutModalOpen, setWorkoutModalOpen] = useState(false)
   const [workoutText, setWorkoutText] = useState('')
@@ -45,8 +44,16 @@ export default function DashboardPage() {
     api('/api/garmin/activities').then(data => setGarminActivities(data))
       .catch(() => {}).finally(() => setGarminLoading(false))
   }
+  const fetchTrends = () => {
+    setTrendsLoading(true)
+    api(`/api/trends?days=${trendsDays}`)
+      .then(data => setTrends(data))
+      .catch(() => setTrends(null))
+      .finally(() => setTrendsLoading(false))
+  }
   useEffect(() => { fetchRides() }, [page])
   useEffect(() => { fetchGarminActivities() }, [])
+  useEffect(() => { fetchTrends() }, [trendsDays])
 
   const showToast = (msg, type = 'success') => { setToast({ message: msg, type }); setTimeout(() => setToast(null), 5000) }
 
@@ -144,20 +151,33 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* FTP / CTL / TSB */}
-      <div className="grid grid-cols-3 gap-2">
-        <MetricCard label="FTP" value="265" color="#f59e0b" sub="target" />
-        <MetricCard label="CTL" value={MOCK_CTL[MOCK_CTL.length - 1]} color="#f8fafc" sub={`+${MOCK_CTL[MOCK_CTL.length - 1] - MOCK_CTL[0]} \u2191`} />
-        <MetricCard label="TSB" value={MOCK_TSB[MOCK_TSB.length - 1]} color="#22d3ee" sub="ottimale" />
-      </div>
+      {/* Weekly Summary */}
+      <WeeklySummary trends={trends} loading={trendsLoading} />
 
-      {/* PMC */}
+      {/* Performance Manager Chart */}
       <G>
         <div className="flex justify-between items-center mb-2.5">
           <Label>Performance Manager</Label>
-          <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>30gg</span>
+          <div className="flex gap-1.5">
+            {[30, 90].map(d => (
+              <button key={d} onClick={() => setTrendsDays(d)}
+                className={`font-mono px-2 py-0.5 rounded text-xs transition-colors ${trendsDays === d ? 'text-amber-400 bg-amber-500/15' : 'text-slate-400 hover:text-slate-300'}`}
+                style={{ fontSize: 12 }}>{d}g</button>
+            ))}
+          </div>
         </div>
-        <PMChart ctl={MOCK_CTL} atl={MOCK_ATL} tsb={MOCK_TSB} />
+        {trendsLoading ? (
+          <div className="h-[120px] flex items-center justify-center">
+            <span className="font-mono text-slate-500 text-xs">Caricamento...</span>
+          </div>
+        ) : trends?.points?.length > 0 ? (
+          <TrendsChart points={trends.points} height={120} />
+        ) : (
+          <div className="h-[120px] flex items-center justify-center flex-col gap-1">
+            <span className="font-mono text-slate-500 text-xs">Nessun dato.</span>
+            <span className="font-mono text-slate-600" style={{ fontSize: 11 }}>Scarica le attivita per iniziare</span>
+          </div>
+        )}
         <div className="flex gap-4 mt-2">
           {[{ c: '#f59e0b', l: 'Fitness' }, { c: '#ef4444', l: 'Fatica' }, { c: '#22d3ee', l: 'Forma' }].map(x => (
             <div key={x.l} className="flex items-center gap-1">
@@ -167,6 +187,22 @@ export default function DashboardPage() {
           ))}
         </div>
       </G>
+
+      {/* FTP / CTL / TSB Metric Cards */}
+      {(() => {
+        const latest = trends?.points?.[trends.points.length - 1]
+        const prev7 = trends?.points?.length >= 7 ? trends.points[trends.points.length - 7] : null
+        const ctlDelta = latest && prev7 ? (latest.ctl - prev7.ctl).toFixed(1) : null
+        return (
+          <div className="grid grid-cols-3 gap-2">
+            <MetricCard label="FTP" value="265" color="#f59e0b" sub="target" />
+            <MetricCard label="CTL" value={latest?.ctl ?? '--'} color="#f8fafc"
+              sub={ctlDelta ? `${ctlDelta > 0 ? '+' : ''}${ctlDelta} \u2191` : ''} />
+            <MetricCard label="TSB" value={latest?.tsb ?? '--'} color="#22d3ee"
+              sub={latest?.form ?? ''} />
+          </div>
+        )
+      })()}
 
       {/* Garmin Activities */}
       <div>
@@ -355,6 +391,91 @@ export default function DashboardPage() {
         </div>
       )}
     </div>
+  )
+}
+
+const FORM_BADGE = {
+  Peaked:       { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'Peaked' },
+  Fresh:        { bg: 'rgba(34,197,94,0.15)', color: '#22c55e', label: 'Fresh' },
+  Building:     { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', label: 'Building' },
+  Fatigued:     { bg: 'rgba(239,68,68,0.15)', color: '#ef4444', label: 'Faticato' },
+  Overreaching: { bg: 'rgba(220,38,38,0.2)', color: '#dc2626', label: 'Sovraccarico' },
+}
+
+const AI_SUGGESTIONS = {
+  Peaked:       'Sei in forma! Perfetto per una gara o un test.',
+  Fresh:        'Buon momento per un lavoro di soglia o VO2max.',
+  Building:     'Allenamento produttivo. Continua cosi.',
+  Fatigued:     'Accumulo di carico. Considera un giorno facile.',
+  Overreaching: 'Hai bisogno di recupero. Riposo o uscita leggera.',
+}
+
+function FormBadge({ form }) {
+  const badge = FORM_BADGE[form] || FORM_BADGE.Building
+  return (
+    <span role="status" aria-label={`Forma: ${badge.label}`}
+      className="font-mono font-medium px-2 py-0.5 rounded-md"
+      style={{ fontSize: 12, background: badge.bg, color: badge.color }}>
+      {badge.label}
+    </span>
+  )
+}
+
+function WeeklySummary({ trends, loading }) {
+  if (loading) {
+    return (
+      <G className="animate-pulse">
+        <Label>Ultimi 7 giorni</Label>
+        <div className="h-16 flex items-center justify-center">
+          <span className="font-mono text-slate-500 text-xs">Caricamento...</span>
+        </div>
+      </G>
+    )
+  }
+
+  const points = trends?.points
+  if (!points?.length) {
+    return (
+      <G className="text-center py-4">
+        <Label>Ultimi 7 giorni</Label>
+        <p className="text-slate-400 text-sm mt-1">Sincronizza le attivita per iniziare</p>
+      </G>
+    )
+  }
+
+  const latest = points[points.length - 1]
+  const rolling7 = trends?.rolling_7d
+  const weeklyTss = rolling7?.tss ?? 0
+
+  // CTL delta over the visible period (last 7 points if available)
+  const prev7 = points.length >= 7 ? points[points.length - 7] : points[0]
+  const ctlDelta = (latest.ctl - prev7.ctl).toFixed(1)
+
+  return (
+    <G>
+      <Label>Ultimi 7 giorni</Label>
+      <div className="flex items-center justify-between mt-2">
+        <div className="text-center">
+          <div className="font-mono font-bold text-amber-400" style={{ fontSize: 24 }}>{Math.round(weeklyTss)}</div>
+          <div className="font-mono text-slate-500" style={{ fontSize: 10 }}>TSS</div>
+        </div>
+        <div className="text-center">
+          <div className="font-mono font-bold text-white" style={{ fontSize: 24 }}>
+            {latest.ctl}
+            <span className={`text-sm ml-1 ${ctlDelta > 0 ? 'text-green-400' : ctlDelta < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+              {ctlDelta > 0 ? '+' : ''}{ctlDelta}
+            </span>
+          </div>
+          <div className="font-mono text-slate-500" style={{ fontSize: 10 }}>CTL</div>
+        </div>
+        <div className="text-center">
+          <FormBadge form={latest.form} />
+        </div>
+      </div>
+      <p className="font-mono text-slate-400 italic mt-3" style={{ fontSize: 12 }}>
+        {AI_SUGGESTIONS[latest.form] || AI_SUGGESTIONS.Building}
+      </p>
+    </G>
   )
 }
 

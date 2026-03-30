@@ -25,3 +25,8 @@ AI-powered cycling training analytics.
 2. Check ARCHITECTURE.md section for that module
 3. Use tests/test_data.json for development
 4. Commit with module prefix: "garmin_sync: add FIT parsing"
+
+## gstack
+
+Use the /browse skill from gstack for all web browsing.
+If gstack skills aren't working, run: cd .claude/skills/gstack && ./setup

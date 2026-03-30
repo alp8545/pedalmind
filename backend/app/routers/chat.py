@@ -211,32 +211,13 @@ async def _get_latest_activity(db: AsyncSession) -> str:
 
 
 async def _build_training_load(db: AsyncSession) -> str:
-    """Approximate CTL/ATL/TSB from all activities with TSS."""
-    result = await db.execute(
-        select(Activity).where(Activity.tss.isnot(None)).order_by(Activity.start_time.desc())
-    )
-    activities = result.scalars().all()
-    if not activities:
-        return "Non abbastanza dati per calcolare CTL/ATL/TSB."
-
-    now = datetime.utcnow()
-    tss_7d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 7)
-    tss_28d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 28)
-    tss_42d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 42)
-    tss_90d = sum(a.tss for a in activities if a.start_time and (now - a.start_time).days <= 90)
-    count_90d = sum(1 for a in activities if a.start_time and (now - a.start_time).days <= 90)
-    total_activities = len(activities)
-
-    atl = round(tss_7d / 7, 1)
-    ctl = round(tss_42d / 42, 1)
-    tsb = round(ctl - atl, 1)
-    weekly_avg_90d = round(tss_90d / 13, 0) if tss_90d else 0
-
-    return (
-        f"CTL (fitness 42gg): {ctl} | ATL (fatica 7gg): {atl} | TSB (forma): {tsb}\n"
-        f"TSS 7gg: {round(tss_7d)} | TSS 28gg: {round(tss_28d)} | TSS 90gg: {round(tss_90d)}\n"
-        f"Media settimanale 90gg: {weekly_avg_90d} TSS/sett | Uscite 90gg: {count_90d} | Storico totale: {total_activities} attivita"
-    )
+    """Get CTL/ATL/TSB training load summary via TrendService (Coggan EWMA)."""
+    try:
+        from app.services.trends import get_trend_summary
+        return await get_trend_summary(db)
+    except Exception as e:
+        logger.warning("TrendService failed, degrading gracefully: %s", e)
+        return "Dati trend non disponibili al momento."
 
 
 async def _get_conversation_history(conv_id: str, db: AsyncSession) -> list[dict]:

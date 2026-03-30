@@ -1,4 +1,4 @@
-export function G({ children, className = '', style }) {
+export function G({ children, className = '', style, ...rest }) {
   return (
     <div
       className={`rounded-[14px] p-4 ${className}`}
@@ -9,6 +9,7 @@ export function G({ children, className = '', style }) {
         border: '1px solid rgba(148,163,184,0.08)',
         ...style,
       }}
+      {...rest}
     >
       {children}
     </div>
@@ -25,7 +26,7 @@ export function Label({ children }) {
 
 export function MetricCard({ label, value, sub, color = '#f8fafc' }) {
   return (
-    <G className="p-3 text-center">
+    <G className="p-3 text-center" aria-label={`${label}: ${value}`}>
       <Label>{label}</Label>
       <div className="font-mono font-bold" style={{ fontSize: 24, color }}>{value}</div>
       {sub && <div className="font-mono text-green-400" style={{ fontSize: 11 }}>{sub}</div>}

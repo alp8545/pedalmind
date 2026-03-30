@@ -83,7 +83,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-from app.routers import auth, profile, rides, chat, sync, garmin_oauth, garmin_sync, workout  # noqa: E402
+from app.routers import auth, profile, rides, chat, sync, garmin_oauth, garmin_sync, workout, trends  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(profile.router, prefix="/api/profile", tags=["profile"])
@@ -93,6 +93,7 @@ app.include_router(sync.router, prefix="/api/sync", tags=["sync"])
 app.include_router(garmin_oauth.router, prefix="/api/garmin", tags=["garmin"])
 app.include_router(garmin_sync.router, prefix="/api/garmin", tags=["garmin-sync"])
 app.include_router(workout.router, prefix="/api/garmin/workout", tags=["workout"])
+app.include_router(trends.router, prefix="/api", tags=["trends"])
 
 
 @app.get("/api/health")

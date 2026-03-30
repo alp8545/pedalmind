@@ -18,20 +18,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.garth_client import fetch_activities, fetch_activity_details, get_bootstrap_debug, GarminRateLimitError, API_TEST_URL
-from app.models.database import Activity
+from app.models.database import Activity, AthleteProfile
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ---- Athlete constants (hardcoded, single user for now) ----
-FTP = 265
-MAX_HR = 192
-RESTING_HR = 57
-WEIGHT = 68
+# ---- Default athlete constants (fallback if AthleteProfile not found) ----
+DEFAULT_FTP = 265
+DEFAULT_MAX_HR = 192
+DEFAULT_RESTING_HR = 57
+DEFAULT_WEIGHT = 68.0
 
 
-def _compute_metrics(activity_data: dict) -> dict:
+async def _get_athlete_constants(db: AsyncSession) -> dict:
+    """Read athlete constants from AthleteProfile DB table, with defaults."""
+    result = await db.execute(select(AthleteProfile).limit(1))
+    profile = result.scalar_one_or_none()
+    if profile:
+        return {
+            "ftp": profile.ftp_watts or DEFAULT_FTP,
+            "max_hr": profile.max_hr or DEFAULT_MAX_HR,
+            "resting_hr": profile.resting_hr or DEFAULT_RESTING_HR,
+            "weight": profile.weight_kg or DEFAULT_WEIGHT,
+        }
+    return {
+        "ftp": DEFAULT_FTP,
+        "max_hr": DEFAULT_MAX_HR,
+        "resting_hr": DEFAULT_RESTING_HR,
+        "weight": DEFAULT_WEIGHT,
+    }
+
+
+def _compute_metrics(activity_data: dict, ftp: int = DEFAULT_FTP) -> dict:
     """Compute TSS, IF, NP and extract key fields from Garmin API response."""
     summary = activity_data.get("summaryDTO", {})
 
@@ -42,10 +61,10 @@ def _compute_metrics(activity_data: dict) -> dict:
     tss = None
     intensity_factor = None
 
-    if normalized_power and FTP:
-        intensity_factor = round(normalized_power / FTP, 3)
+    if normalized_power and ftp:
+        intensity_factor = round(normalized_power / ftp, 3)
         tss = round(
-            (duration_secs * normalized_power * intensity_factor) / (FTP * 3600) * 100,
+            (duration_secs * normalized_power * intensity_factor) / (ftp * 3600) * 100,
             1,
         )
 
@@ -86,7 +105,8 @@ def _safe_int(val) -> int | None:
         return None
 
 
-def _generate_analysis(activity: Activity) -> str:
+def _generate_analysis(activity: Activity, weight: float = DEFAULT_WEIGHT,
+                       max_hr: int = DEFAULT_MAX_HR, resting_hr: int = DEFAULT_RESTING_HR) -> str:
     """Generate rule-based textual analysis from activity metrics."""
     parts: list[str] = []
 
@@ -109,12 +129,12 @@ def _generate_analysis(activity: Activity) -> str:
         )
 
     if activity.avg_power:
-        w_kg = round(activity.avg_power / WEIGHT, 2)
+        w_kg = round(activity.avg_power / weight, 2)
         parts.append(f"Potenza media: {activity.avg_power}W ({w_kg} W/kg)")
 
     if activity.avg_hr and activity.max_hr:
         hr_reserve_pct = round(
-            (activity.avg_hr - RESTING_HR) / (MAX_HR - RESTING_HR) * 100
+            (activity.avg_hr - resting_hr) / (max_hr - resting_hr) * 100
         )
         parts.append(f"HR: {activity.avg_hr}/{activity.max_hr} bpm ({hr_reserve_pct}% HRR)")
 
@@ -251,6 +271,8 @@ async def garmin_debug():
 @router.post("/sync/last")
 async def sync_last_ride(db: AsyncSession = Depends(get_db)):
     """Download the latest activity from Garmin and save to DB."""
+    constants = await _get_athlete_constants(db)
+
     try:
         activities = await asyncio.to_thread(fetch_activities, days=3, limit=5)
     except GarminRateLimitError:
@@ -280,7 +302,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=502, detail=f"Errore download dettagli attivita: {e}")
 
     try:
-        metrics = _compute_metrics(details)
+        metrics = _compute_metrics(details, ftp=constants["ftp"])
         activity = Activity(
             id=activity_id,
             raw_data=details,
@@ -299,6 +321,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
 @router.post("/sync/weeks/{weeks}")
 async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
     """Download all activities from the last N weeks."""
+    constants = await _get_athlete_constants(db)
     days = weeks * 7
 
     try:
@@ -326,7 +349,7 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
 
         try:
             details = await asyncio.to_thread(fetch_activity_details, activity_id)
-            metrics = _compute_metrics(details)
+            metrics = _compute_metrics(details, ftp=constants["ftp"])
 
             activity = Activity(
                 id=activity_id,
@@ -424,7 +447,13 @@ async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db))
     if not activity:
         raise HTTPException(status_code=404, detail="Attivita non trovata")
 
-    analysis = _generate_analysis(activity)
+    constants = await _get_athlete_constants(db)
+    analysis = _generate_analysis(
+        activity,
+        weight=constants["weight"],
+        max_hr=constants["max_hr"],
+        resting_hr=constants["resting_hr"],
+    )
 
     activity.analyzed = True
     activity.analysis_text = analysis

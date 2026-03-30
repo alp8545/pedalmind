@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, String, Integer, Float, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import BigInteger, Boolean, String, Integer, Float, Text, DateTime, ForeignKey, Index, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -103,6 +103,10 @@ class Activity(Base):
     analysis_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_activities_start_time", "start_time"),
+    )
 
 
 class ChatConversation(Base):

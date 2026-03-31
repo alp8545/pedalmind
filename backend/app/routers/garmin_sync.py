@@ -510,6 +510,9 @@ async def list_activities(limit: int = 200, offset: int = 0, db: AsyncSession = 
             "avg_cadence": a.avg_cadence,
             "elevation_gain": a.elevation_gain,
             "analyzed": a.analyzed,
+            "decoupling": a.decoupling,
+            "hr_recovery_30s": a.hr_recovery_30s,
+            "hr_recovery_60s": a.hr_recovery_60s,
         }
         for a in activities
     ]
@@ -546,6 +549,9 @@ async def get_activity(activity_id: int, db: AsyncSession = Depends(get_db), cur
         "analyzed": activity.analyzed,
         "analysis_text": activity.analysis_text,
         "raw_data": activity.raw_data,
+        "decoupling": activity.decoupling,
+        "hr_recovery_30s": activity.hr_recovery_30s,
+        "hr_recovery_60s": activity.hr_recovery_60s,
     }
 
 

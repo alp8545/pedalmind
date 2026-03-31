@@ -168,10 +168,17 @@ async def _build_recent_rides_with_analysis(user_id: str, db: AsyncSession) -> s
             parts.append(f"IF {a.intensity_factor:.2f}")
         if a.avg_hr:
             parts.append(f"FC {a.avg_hr}bpm")
-        if a.raw_data and isinstance(a.raw_data, dict):
+        if a.decoupling is not None:
+            quality = "buono" if abs(a.decoupling) < 5 else "alto"
+            parts.append(f"Decoupling: {a.decoupling:.1f}% ({quality} <5%)")
+        elif a.raw_data and isinstance(a.raw_data, dict):
             dec = a.raw_data.get("decoupling_pct")
             if dec is not None:
                 parts.append(f"Dec {dec:.1f}%")
+        if a.hr_recovery_60s is not None:
+            parts.append(f"Recupero HR: -{a.hr_recovery_60s}bpm in 60s")
+        elif a.hr_recovery_30s is not None:
+            parts.append(f"Recupero HR: -{a.hr_recovery_30s}bpm in 30s")
         lines.append(", ".join(parts))
 
     return "\n".join(lines)

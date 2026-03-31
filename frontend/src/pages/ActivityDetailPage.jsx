@@ -172,14 +172,71 @@ export default function ActivityDetailPage() {
         </G>
       )}
 
-      {/* AI Analysis + Decoupling */}
-      {(activity.analysis_text || decoupling != null) && (
+      {/* Decoupling + HR Recovery cards */}
+      {(activity.decoupling != null || activity.hr_recovery_30s != null || activity.hr_recovery_60s != null) && (
+        <div className="grid grid-cols-2 gap-2">
+          {/* Decoupling card */}
+          {activity.decoupling != null && (() => {
+            const dec = activity.decoupling
+            const decColor = dec < 3 ? '#22c55e' : dec <= 5 ? '#f59e0b' : '#ef4444'
+            return (
+              <G className="!p-3">
+                <Label>DECOUPLING Pw:Hr</Label>
+                <div className="font-mono font-bold mt-0.5" style={{ fontSize: 24, color: decColor }}>
+                  {dec.toFixed(1)}%
+                </div>
+                <div className="font-mono text-slate-500 mt-1" style={{ fontSize: 10 }}>
+                  {'< 3% ottimo | 3-5% buono | > 5% da migliorare'}
+                </div>
+              </G>
+            )
+          })()}
+
+          {/* HR Recovery card */}
+          {(activity.hr_recovery_30s != null || activity.hr_recovery_60s != null) && (() => {
+            const drop60 = activity.hr_recovery_60s ?? 0
+            const recColor = drop60 > 30 ? '#22c55e' : drop60 >= 20 ? '#f59e0b' : '#ef4444'
+            return (
+              <G className="!p-3">
+                <Label>RECUPERO HR</Label>
+                <div className="flex items-baseline gap-2 mt-0.5">
+                  {activity.hr_recovery_30s != null && (
+                    <div className="text-center">
+                      <div className="font-mono font-bold" style={{ fontSize: 24, color: recColor }}>
+                        {activity.hr_recovery_30s}
+                      </div>
+                      <div className="font-mono text-slate-500" style={{ fontSize: 9 }}>30s</div>
+                    </div>
+                  )}
+                  {activity.hr_recovery_60s != null && (
+                    <div className="text-center">
+                      <div className="font-mono font-bold" style={{ fontSize: 24, color: recColor }}>
+                        {activity.hr_recovery_60s}
+                      </div>
+                      <div className="font-mono text-slate-500" style={{ fontSize: 9 }}>60s</div>
+                    </div>
+                  )}
+                  <span className="font-mono text-slate-500" style={{ fontSize: 10 }}>bpm</span>
+                </div>
+                <div className="font-mono text-slate-500 mt-1" style={{ fontSize: 10 }}>
+                  {activity.hr_recovery_30s != null ? `30s: -${activity.hr_recovery_30s}` : ''}
+                  {activity.hr_recovery_30s != null && activity.hr_recovery_60s != null ? ' | ' : ''}
+                  {activity.hr_recovery_60s != null ? `60s: -${activity.hr_recovery_60s}` : ''}
+                </div>
+              </G>
+            )
+          })()}
+        </div>
+      )}
+
+      {/* AI Analysis + Decoupling (legacy raw_data fallback) */}
+      {(activity.analysis_text || (decoupling != null && activity.decoupling == null)) && (
         <G style={{ borderLeft: '3px solid #f59e0b', borderRadius: '3px 14px 14px 3px' }}>
           <div className="flex items-center gap-1.5 mb-2">
             <span style={{ fontSize: 14 }}>{'\uD83D\uDEB4'}</span>
             <span className="font-mono text-amber-500 uppercase" style={{ fontSize: 10, letterSpacing: 1.5 }}>Insight PedalMind</span>
           </div>
-          {decoupling != null && (
+          {decoupling != null && activity.decoupling == null && (
             <div className="flex items-center gap-3 mb-3 p-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)' }}>
               <div>
                 <div className="font-mono text-slate-400 uppercase" style={{ fontSize: 10 }}>Decoupling Cardiaco</div>

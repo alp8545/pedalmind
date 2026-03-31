@@ -98,6 +98,11 @@ class Activity(Base):
     raw_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     splits_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Second-by-second derived metrics
+    decoupling: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hr_recovery_30s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hr_recovery_60s: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Analysis
     analyzed: Mapped[bool] = mapped_column(default=False)
     analysis_text: Mapped[str | None] = mapped_column(Text, nullable=True)

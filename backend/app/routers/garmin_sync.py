@@ -24,7 +24,8 @@ from app.core.garth_client import (
     garmin_api_call, get_bootstrap_debug,
     GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
 )
-from app.models.database import Activity, AthleteProfile
+from app.models.database import Activity, AthleteProfile, User
+from app.services.ride_metrics import compute_decoupling, compute_hr_recovery
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,77 @@ def _safe_int(val) -> int | None:
         return int(round(val))
     except (ValueError, TypeError):
         return None
+
+
+async def _compute_second_by_second_metrics(activity_id: int, activity: Activity) -> None:
+    """Fetch second-by-second data and compute decoupling + HR recovery.
+
+    Updates the activity object in-place. Never raises — failures are logged.
+    """
+    try:
+        details = await garmin_api_call(
+            f"/activity-service/activity/{activity_id}/details"
+        )
+        if not details:
+            return
+
+        # Garmin details response has metrics in activityDetailMetrics or similar
+        records: list[dict] = []
+        metric_descriptors = details.get("metricDescriptors", [])
+        detail_metrics = details.get("activityDetailMetrics", [])
+
+        # Build a key map: index -> key name
+        key_map: dict[int, str] = {}
+        for desc in metric_descriptors:
+            idx = desc.get("metricsIndex")
+            key = desc.get("key", "")
+            if idx is not None:
+                key_map[idx] = key
+
+        # Find indices for power and HR
+        power_idx: int | None = None
+        hr_idx: int | None = None
+        for idx, key in key_map.items():
+            if key == "directPower" or key == "power":
+                power_idx = idx
+            elif key == "directHeartRate" or key == "heartRate":
+                hr_idx = idx
+
+        if power_idx is None and hr_idx is None:
+            return
+
+        for metric in detail_metrics:
+            metrics_list = metric.get("metrics", [])
+            record: dict = {"power": None, "heartRate": None}
+            if power_idx is not None and power_idx < len(metrics_list):
+                val = metrics_list[power_idx]
+                record["power"] = int(val) if val is not None else None
+            if hr_idx is not None and hr_idx < len(metrics_list):
+                val = metrics_list[hr_idx]
+                record["heartRate"] = int(val) if val is not None else None
+            records.append(record)
+
+        if not records:
+            return
+
+        decoupling = compute_decoupling(records)
+        if decoupling is not None:
+            activity.decoupling = decoupling
+
+        hr_recovery = compute_hr_recovery(records)
+        if hr_recovery is not None:
+            activity.hr_recovery_30s = hr_recovery.get("drop_30s")
+            activity.hr_recovery_60s = hr_recovery.get("drop_60s")
+
+        logger.info(
+            "Activity %s: decoupling=%.2f%%, hr_recovery_30s=%s, hr_recovery_60s=%s",
+            activity_id,
+            decoupling if decoupling is not None else 0,
+            activity.hr_recovery_30s,
+            activity.hr_recovery_60s,
+        )
+    except Exception:
+        logger.warning("Failed to compute second-by-second metrics for %s", activity_id, exc_info=True)
 
 
 def _generate_analysis(activity: Activity, weight: float = DEFAULT_WEIGHT,
@@ -247,7 +319,7 @@ async def garmin_debug():
 
 
 @router.post("/auth/reset")
-async def reset_garmin_auth():
+async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
     """Reset Garmin auth backoff and force re-authentication on next request."""
     reset_auth_backoff()
     return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
@@ -291,7 +363,7 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
 
 
 @router.post("/sync/last")
-async def sync_last_ride(db: AsyncSession = Depends(get_db)):
+async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download the latest activity from Garmin and save to DB."""
     constants = await _get_athlete_constants(db)
 
@@ -332,6 +404,10 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
             **metrics,
         )
         db.add(activity)
+
+        # Compute second-by-second metrics (decoupling, HR recovery)
+        await _compute_second_by_second_metrics(activity_id, activity)
+
         await db.commit()
     except Exception as e:
         logger.exception("Failed to save activity %s to DB", activity_id)
@@ -341,7 +417,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sync/weeks/{weeks}")
-async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
+async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download all activities from the last N weeks."""
     constants = await _get_athlete_constants(db)
     days = weeks * 7
@@ -380,6 +456,10 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
                 **metrics,
             )
             db.add(activity)
+
+            # Compute second-by-second metrics (decoupling, HR recovery)
+            await _compute_second_by_second_metrics(activity_id, activity)
+
             synced.append({"activity_id": activity_id, **metrics})
         except Exception as e:
             logger.warning("Error syncing activity %s: %s", activity_id, e)
@@ -395,7 +475,7 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/activities")
-async def list_activities(limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db)):
+async def list_activities(limit: int = 200, offset: int = 0, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List activities stored in DB, newest first."""
     result = await db.execute(
         select(Activity).order_by(Activity.start_time.desc()).offset(offset).limit(limit)
@@ -424,7 +504,7 @@ async def list_activities(limit: int = 200, offset: int = 0, db: AsyncSession = 
 
 
 @router.get("/activities/{activity_id}")
-async def get_activity(activity_id: int, db: AsyncSession = Depends(get_db)):
+async def get_activity(activity_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Full detail for a single activity (for analysis view)."""
     result = await db.execute(select(Activity).where(Activity.id == activity_id))
     activity = result.scalar_one_or_none()
@@ -458,7 +538,7 @@ async def get_activity(activity_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/activities/{activity_id}/analyze")
-async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db)):
+async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Generate rule-based analysis for an activity.
 
     In the future this will call Anthropic API for AI-powered coaching.
@@ -489,6 +569,7 @@ async def import_bulk_activities(
     activities: list[dict],
     upsert: bool = True,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Import a batch of pre-formatted activities. With upsert=true, updates existing records."""
     existing_result = await db.execute(select(Activity))

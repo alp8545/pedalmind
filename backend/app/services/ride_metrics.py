@@ -1,8 +1,9 @@
-"""Second-by-second ride metrics: decoupling and HR recovery.
+"""Ride metrics: decoupling and HR recovery.
 
 Expects records as list[dict] where each dict has at least
-'power' (watts, int|None) and 'heartRate' (bpm, int|None) keys,
-one entry per second.
+'power' (watts, int|None) and 'heartRate' (bpm, int|None) keys.
+Records can be sampled at any interval (Garmin often uses ~25-40s intervals,
+not true second-by-second).
 """
 
 from __future__ import annotations
@@ -11,11 +12,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Minimum ride length in seconds (20 min) to compute decoupling
-MIN_DURATION_SECS = 20 * 60
+# Minimum valid data points to compute decoupling (need enough for a meaningful split)
+MIN_VALID_RECORDS = 20
 
-# Window for finding hardest effort (5 min)
-HARD_EFFORT_WINDOW = 5 * 60
+# Minimum valid data points for HR recovery (need enough to find effort + recovery)
+MIN_RECORDS_HR_RECOVERY = 10
+
+# Number of records after peak effort to look for HR recovery
+HR_RECOVERY_WINDOW = 5
 
 
 def compute_decoupling(records: list[dict]) -> float | None:
@@ -25,11 +29,8 @@ def compute_decoupling(records: list[dict]) -> float | None:
     avg(power) / avg(HR). Decoupling = ((ratio_h2 - ratio_h1) / ratio_h1) * 100.
     Positive means HR drifted up relative to power (bad aerobic efficiency).
 
-    Returns None if ride is < 20 min or lacks power+HR data.
+    Returns None if not enough valid records with power+HR data.
     """
-    if len(records) < MIN_DURATION_SECS:
-        return None
-
     # Filter to records that have both power and HR
     valid = [
         r for r in records
@@ -39,7 +40,7 @@ def compute_decoupling(records: list[dict]) -> float | None:
         and r["heartRate"] > 0
     ]
 
-    if len(valid) < MIN_DURATION_SECS:
+    if len(valid) < MIN_VALID_RECORDS:
         return None
 
     mid = len(valid) // 2
@@ -65,30 +66,35 @@ def compute_decoupling(records: list[dict]) -> float | None:
 
 
 def compute_hr_recovery(records: list[dict]) -> dict | None:
-    """Find the highest 5-min avg power segment, then measure HR recovery.
+    """Find the hardest effort segment, then measure HR recovery.
 
-    From the end of that segment, measure HR drop at +30s and +60s.
+    Uses a sliding window (25% of records, min 3) to find the highest avg
+    power segment. Then looks at the next few records after that segment
+    for HR drop.
+
+    Garmin records are NOT per-second — they're sampled every ~25-40s.
+    So "1 record after" is roughly 30s, "2 records after" is roughly 60s.
 
     Returns:
         {"hr_peak": int, "hr_30s": int, "hr_60s": int,
          "drop_30s": int, "drop_60s": int}
         or None if not enough data.
     """
-    if len(records) < HARD_EFFORT_WINDOW + 60:
-        return None
-
-    # Build power values list (0 for missing)
+    # Need power and HR data
     powers = [r.get("power") or 0 for r in records]
     hrs = [r.get("heartRate") or 0 for r in records]
 
-    # Sliding window to find highest 5-min avg power segment
-    window = HARD_EFFORT_WINDOW
+    if len(records) < MIN_RECORDS_HR_RECOVERY:
+        return None
+
+    # Window = ~25% of records (effort segment), min 3 records
+    window = max(3, len(records) // 4)
+
     best_avg = -1.0
     best_end = -1
 
-    # Running sum for efficiency
     current_sum = sum(powers[:window])
-    if current_sum / window > best_avg:
+    if window > 0 and current_sum / window > best_avg:
         best_avg = current_sum / window
         best_end = window
 
@@ -97,7 +103,7 @@ def compute_hr_recovery(records: list[dict]) -> dict | None:
         avg = current_sum / window
         if avg > best_avg:
             best_avg = avg
-            best_end = i + 1  # exclusive end index
+            best_end = i + 1
 
     if best_end < 0 or best_avg <= 0:
         return None
@@ -107,14 +113,10 @@ def compute_hr_recovery(records: list[dict]) -> dict | None:
     if hr_peak <= 0:
         return None
 
-    # Check we have enough data after the segment
-    if best_end + 60 > len(records):
-        # Try with what we have
-        hr_30s = hrs[best_end + 29] if best_end + 30 <= len(hrs) else None
-        hr_60s = hrs[best_end + 59] if best_end + 60 <= len(hrs) else None
-    else:
-        hr_30s = hrs[best_end + 29]
-        hr_60s = hrs[best_end + 59]
+    # Look for HR recovery in the records AFTER the effort
+    # Each record is ~30-40s apart, so +1 record ≈ 30s, +2 records ≈ 60s
+    hr_30s = hrs[best_end] if best_end < len(hrs) else None
+    hr_60s = hrs[best_end + 1] if best_end + 1 < len(hrs) else None
 
     if hr_30s is None and hr_60s is None:
         return None
@@ -127,7 +129,6 @@ def compute_hr_recovery(records: list[dict]) -> dict | None:
         result["hr_60s"] = hr_60s
         result["drop_60s"] = hr_peak - hr_60s
 
-    # Must have at least one valid recovery measurement
     if "drop_30s" not in result and "drop_60s" not in result:
         return None
 

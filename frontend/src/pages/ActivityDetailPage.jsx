@@ -114,39 +114,48 @@ export default function ActivityDetailPage() {
         ))}
       </div>
 
-      {/* Power blocks + HR overlay */}
-      {lapData.length > 1 && (
+      {/* Power blocks — time-proportional width */}
+      {lapData.length > 1 && (() => {
+        const totalSecs = lapData.reduce((s, d) => s + d.durationSecs, 0) || 1
+        const maxPower = Math.max(...lapData.map(d => d.avgPower).filter(Boolean), 1)
+        const chartHeight = 160
+        return (
         <G>
           <Label>Blocchi di Potenza ({lapData.length} laps)</Label>
-          <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={lapData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-              <XAxis dataKey="lap" tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="power" tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} unit="W" width={48} />
-              <YAxis yAxisId="hr" orientation="right" tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} unit="bpm" width={50} domain={['dataMin - 20', 'dataMax + 10']} />
-              <Tooltip content={({ active, payload, label }) => {
-                if (!active || !payload?.length) return null
-                const d = payload[0].payload
-                return (
-                  <div className="rounded-lg p-3 font-mono" style={{ background: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 13 }}>
-                    <div className="font-semibold text-white mb-1.5">Lap {label}</div>
-                    <div>Potenza: <span className="text-amber-400">{d.avgPower}W</span></div>
-                    {d.np != null && <div>NP: <span className="text-amber-400">{d.np}W</span></div>}
-                    {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR} bpm</span></div>}
-                    <div>Durata: {fmtDuration(d.durationSecs)}</div>
-                    {d.speedKmh != null && <div>Vel: {d.speedKmh} km/h</div>}
-                    {d.cadence != null && <div>Cadenza: {d.cadence} rpm</div>}
-                    {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
+          <div className="flex items-end gap-px mt-1" style={{ height: chartHeight }}>
+            {lapData.map((d, i) => {
+              const widthPct = (d.durationSecs / totalSecs) * 100
+              const heightPct = d.avgPower > 0 ? Math.max((d.avgPower / maxPower) * 100, 8) : 8
+              const color = powerToColor(d.avgPower)
+              return (
+                <div key={i} className="relative group flex flex-col justify-end"
+                  style={{ width: `${widthPct}%`, height: '100%' }}>
+                  {/* Bar */}
+                  <div className="rounded-t-sm transition-opacity group-hover:opacity-80"
+                    style={{ height: `${heightPct}%`, background: color, minHeight: 4 }} />
+                  {/* Time label (only show if block is wide enough) */}
+                  {widthPct > 6 && (
+                    <div className="font-mono text-center text-slate-500 mt-0.5" style={{ fontSize: 8 }}>
+                      {fmtDuration(d.durationSecs)}
+                    </div>
+                  )}
+                  {/* Hover tooltip */}
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
+                    <div className="rounded-lg p-2 font-mono whitespace-nowrap"
+                      style={{ background: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 11 }}>
+                      <div className="font-semibold text-white">Lap {i + 1}</div>
+                      <div>Potenza: <span style={{ color }}>{d.avgPower}W</span></div>
+                      {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR}bpm</span></div>}
+                      <div>Durata: {fmtDuration(d.durationSecs)}</div>
+                      {d.cadence != null && <div>Cadenza: {d.cadence}rpm</div>}
+                      {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
+                    </div>
                   </div>
-                )
-              }} />
-              <Bar yAxisId="power" dataKey="avgPower" radius={[3, 3, 0, 0]}>
-                {lapData.map((d, i) => (
-                  <Cell key={i} fill={powerToColor(d.avgPower)} />
-                ))}
-              </Bar>
-              <Line yAxisId="hr" type="monotone" dataKey="avgHR" stroke="#ef4444" strokeWidth={2} dot={{ r: 2.5, fill: '#ef4444' }} connectNulls />
-            </ComposedChart>
-          </ResponsiveContainer>
+                </div>
+              )
+            })}
+          </div>
+          {/* Legend */}
           <div className="flex gap-3 mt-1.5 flex-wrap items-center">
             {['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7'].map((z, i) => (
               <div key={z} className="flex items-center gap-1">
@@ -154,13 +163,10 @@ export default function ActivityDetailPage() {
                 <span className="font-mono text-slate-400" style={{ fontSize: 9 }}>{z}</span>
               </div>
             ))}
-            <div className="flex items-center gap-1 ml-2">
-              <div className="rounded-sm" style={{ width: 12, height: 2, background: '#ef4444' }} />
-              <span className="font-mono text-slate-400" style={{ fontSize: 9 }}>FC</span>
-            </div>
           </div>
         </G>
-      )}
+        )
+      })()}
 
       {/* Power Zones */}
       {powerZoneData.length > 0 && totalZoneSecs > 0 && (

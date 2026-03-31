@@ -48,22 +48,40 @@ function formatDuration(secs) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+function stepIntensity(step) {
+  // Returns 0.0-1.0 based on zone/power range
+  const t = step.target
+  if (!t) return 0.2
+  if (t.type === 'power.zone') {
+    const z = t.value || 1
+    return [0.15, 0.3, 0.5, 0.65, 0.8, 0.9, 1.0][Math.min(z - 1, 6)]
+  }
+  if (t.type === 'power.range') {
+    const avg = ((t.value_low || 0) + (t.value_high || 0)) / 2
+    return Math.min(avg / (FTP * 1.2), 1.0) // normalize to ~120% FTP
+  }
+  return 0.3
+}
+
 function StepBar({ step, totalSecs }) {
   const pct = totalSecs > 0 ? Math.max((step.duration_secs || 0) / totalSecs * 100, 4) : 10
   const color = zoneColor(step)
-  const isRecovery = step.target?.type === 'power.zone' && (step.target?.value || 0) <= 2
+  const intensity = stepIntensity(step)
+  const maxH = 36
+  const minH = 6
+  const h = Math.round(minH + intensity * (maxH - minH))
 
   return (
     <div title={step.description || ''}
-      className="rounded-sm flex items-end justify-center overflow-hidden"
+      className="rounded-t-sm flex items-end justify-center overflow-hidden"
       style={{
         width: `${pct}%`,
         minWidth: 6,
-        height: isRecovery ? 16 : 28,
-        background: isRecovery ? `${color}40` : color,
+        height: h,
+        background: intensity < 0.3 ? `${color}50` : color,
       }}>
-      {step.duration_secs >= 300 && (
-        <span className="font-mono text-white/80 leading-none" style={{ fontSize: 7 }}>
+      {step.duration_secs >= 300 && pct > 8 && (
+        <span className="font-mono text-white/80 leading-none pb-0.5" style={{ fontSize: 7 }}>
           {formatDuration(step.duration_secs)}
         </span>
       )}
@@ -104,7 +122,7 @@ function WorkoutCard({ workout, onToggle, expanded }) {
             </div>
           </div>
           {/* Visual step composition bar */}
-          <div className="flex gap-px items-end" style={{ height: 28 }}>
+          <div className="flex gap-px items-end" style={{ height: 36 }}>
             {flatSteps.map((s, i) => <StepBar key={i} step={s} totalSecs={totalSecs} />)}
           </div>
         </G>
@@ -312,7 +330,7 @@ export default function SeasonPage() {
         <div className="h-1 bg-[#0f172a] rounded-full mt-3">
           <div className="h-full rounded-full" style={{ width: '68%', background: 'linear-gradient(90deg, #f59e0b, #d97706)' }} />
         </div>
-        <div className="font-mono text-slate-400 mt-1" style={{ fontSize: 12 }}>+30W rimanenti \u00B7 ~16 settimane</div>
+        <div className="font-mono text-slate-400 mt-1" style={{ fontSize: 12 }}>+30W rimanenti, ~16 settimane</div>
       </G>
 
       {/* Races / Objectives */}

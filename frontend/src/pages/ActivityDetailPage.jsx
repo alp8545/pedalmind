@@ -194,34 +194,23 @@ export default function ActivityDetailPage() {
 
           {/* HR Recovery card */}
           {(activity.hr_recovery_30s != null || activity.hr_recovery_60s != null) && (() => {
-            const drop60 = activity.hr_recovery_60s ?? 0
+            const drop60 = activity.hr_recovery_60s ?? activity.hr_recovery_30s ?? 0
             const recColor = drop60 > 30 ? '#22c55e' : drop60 >= 20 ? '#f59e0b' : '#ef4444'
+            const quality = drop60 > 30 ? 'Ottimo' : drop60 >= 20 ? 'Buono' : 'Da migliorare'
             return (
               <G className="!p-3">
                 <Label>RECUPERO HR</Label>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  {activity.hr_recovery_30s != null && (
-                    <div className="text-center">
-                      <div className="font-mono font-bold" style={{ fontSize: 24, color: recColor }}>
-                        {activity.hr_recovery_30s}
-                      </div>
-                      <div className="font-mono text-slate-500" style={{ fontSize: 9 }}>30s</div>
-                    </div>
-                  )}
-                  {activity.hr_recovery_60s != null && (
-                    <div className="text-center">
-                      <div className="font-mono font-bold" style={{ fontSize: 24, color: recColor }}>
-                        {activity.hr_recovery_60s}
-                      </div>
-                      <div className="font-mono text-slate-500" style={{ fontSize: 9 }}>60s</div>
-                    </div>
-                  )}
-                  <span className="font-mono text-slate-500" style={{ fontSize: 10 }}>bpm</span>
+                <div className="font-mono font-bold mt-0.5" style={{ fontSize: 24, color: recColor }}>
+                  -{drop60} bpm
+                </div>
+                <div className="font-mono text-slate-400 mt-0.5" style={{ fontSize: 11 }}>
+                  in ~60s dopo sforzo max
+                </div>
+                <div className="font-mono mt-1.5" style={{ fontSize: 11, color: recColor }}>
+                  {quality}
                 </div>
                 <div className="font-mono text-slate-500 mt-1" style={{ fontSize: 10 }}>
-                  {activity.hr_recovery_30s != null ? `30s: -${activity.hr_recovery_30s}` : ''}
-                  {activity.hr_recovery_30s != null && activity.hr_recovery_60s != null ? ' | ' : ''}
-                  {activity.hr_recovery_60s != null ? `60s: -${activity.hr_recovery_60s}` : ''}
+                  {'>'}30bpm ottimo | 20-30 buono | {'<'}20 da migliorare
                 </div>
               </G>
             )

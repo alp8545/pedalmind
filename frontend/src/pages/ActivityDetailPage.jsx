@@ -127,7 +127,12 @@ export default function ActivityDetailPage() {
         const maxHR = hasHR ? Math.max(...hrValues) + 10 : 1
         const hrRange = maxHR - minHR || 1
 
-        // Compute X positions at the CENTER of each lap block
+        // Compute HR curve points — X at center of each lap, Y scaled to chart height
+        // Y range: 10px top padding to (chartHeight - 10px) bottom padding
+        const yPadTop = 10
+        const yPadBot = 10
+        const yUsable = chartHeight - yPadTop - yPadBot
+
         let hrPoints = ''
         if (hasHR) {
           let cumulativePct = 0
@@ -136,9 +141,11 @@ export default function ActivityDetailPage() {
             const widthPct = (d.durationSecs / totalSecs) * 100
             const cx = cumulativePct + widthPct / 2
             cumulativePct += widthPct
-            if (d.avgHR != null) {
-              const y = chartHeight - ((d.avgHR - minHR) / hrRange) * (chartHeight - 12) - 6
-              pts.push({ x: cx, y })
+            if (d.avgHR != null && d.avgHR > 0) {
+              // Higher HR = higher on screen = lower Y value
+              const normalized = (d.avgHR - minHR) / hrRange  // 0..1
+              const y = yPadTop + (1 - normalized) * yUsable  // flip: high HR = low Y
+              pts.push({ x: cx, y: Math.max(yPadTop, Math.min(chartHeight - yPadBot, y)) })
             }
           }
           // Build smooth cubic bezier path
@@ -157,8 +164,8 @@ export default function ActivityDetailPage() {
         return (
         <G>
           <Label>Blocchi di Potenza ({lapData.length} laps)</Label>
-          {/* Chart area: bars + HR curve + time axis */}
-          <div className="relative mt-1" style={{ height: chartHeight }}>
+          {/* Chart: time-proportional power bars + HR curve inside */}
+          <div className="relative mt-1 overflow-hidden" style={{ height: chartHeight }}>
             {/* Power bars */}
             <div className="flex items-end gap-px absolute inset-0">
               {lapData.map((d, i) => {
@@ -168,16 +175,9 @@ export default function ActivityDetailPage() {
                 return (
                   <div key={i} className="relative group flex flex-col justify-end"
                     style={{ width: `${widthPct}%`, height: '100%' }}>
-                    <div className="rounded-t-sm transition-opacity group-hover:opacity-80 flex items-end justify-center overflow-hidden"
-                      style={{ height: `${heightPct}%`, background: color, minHeight: 8 }}>
-                      {/* Duration label inside the bar */}
-                      {widthPct > 5 && (
-                        <span className="font-mono text-white/70 pb-0.5 leading-none" style={{ fontSize: 8 }}>
-                          {fmtDuration(d.durationSecs)}
-                        </span>
-                      )}
-                    </div>
-                    {/* Hover tooltip */}
+                    <div className="rounded-t-sm transition-opacity group-hover:opacity-70"
+                      style={{ height: `${heightPct}%`, background: color, minHeight: 4 }} />
+                    {/* Tooltip on hover */}
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
                       <div className="rounded-lg p-2 font-mono whitespace-nowrap"
                         style={{ background: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 11 }}>
@@ -185,6 +185,7 @@ export default function ActivityDetailPage() {
                         <div>Potenza: <span style={{ color }}>{d.avgPower}W</span></div>
                         {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR}bpm</span></div>}
                         <div>Durata: {fmtDuration(d.durationSecs)}</div>
+                        {d.speedKmh != null && <div>Vel: {d.speedKmh} km/h</div>}
                         {d.cadence != null && <div>Cadenza: {d.cadence}rpm</div>}
                         {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
                       </div>
@@ -193,23 +194,17 @@ export default function ActivityDetailPage() {
                 )
               })}
             </div>
-            {/* HR curve overlay */}
+            {/* HR curve overlay — clipped inside chart area */}
             {hasHR && hrPoints && (
-              <svg className="absolute inset-0 pointer-events-none" viewBox={`0 0 100 ${chartHeight}`} preserveAspectRatio="none">
-                <path d={hrPoints} fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" opacity="0.85" />
+              <svg className="absolute inset-0 pointer-events-none overflow-hidden"
+                width="100%" height="100%"
+                viewBox={`0 0 100 ${chartHeight}`}
+                preserveAspectRatio="none">
+                <path d={hrPoints} fill="none" stroke="#ef4444" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke" opacity="0.85" />
               </svg>
             )}
-          </div>
-          {/* Time axis under bars */}
-          <div className="flex gap-px mt-0.5">
-            {lapData.map((d, i) => {
-              const widthPct = (d.durationSecs / totalSecs) * 100
-              return (
-                <div key={i} className="font-mono text-center text-slate-500 overflow-hidden" style={{ width: `${widthPct}%`, fontSize: 8 }}>
-                  {widthPct > 4 ? fmtDuration(d.durationSecs) : ''}
-                </div>
-              )
-            })}
           </div>
           {/* Legend */}
           <div className="flex gap-3 mt-2 flex-wrap items-center">

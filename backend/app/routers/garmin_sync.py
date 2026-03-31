@@ -115,6 +115,10 @@ def _safe_int(val) -> int | None:
 async def _compute_second_by_second_metrics(activity_id: int, activity: Activity) -> None:
     """Fetch second-by-second data and compute decoupling + HR recovery.
 
+    Garmin's /details endpoint returns records with flat keys like
+    'directPower', 'directHeartRate' (already parsed by ride_records.py).
+    We normalize them to 'power' and 'heartRate' for the compute functions.
+
     Updates the activity object in-place. Never raises — failures are logged.
     """
     try:
@@ -124,10 +128,13 @@ async def _compute_second_by_second_metrics(activity_id: int, activity: Activity
         if not details:
             return
 
-        # Garmin details response has metrics in activityDetailMetrics or similar
-        records: list[dict] = []
+        # Parse the Garmin response into flat records
         metric_descriptors = details.get("metricDescriptors", [])
         detail_metrics = details.get("activityDetailMetrics", [])
+
+        if not metric_descriptors or not detail_metrics:
+            logger.info("Activity %s: no detail metrics in response", activity_id)
+            return
 
         # Build a key map: index -> key name
         key_map: dict[int, str] = {}
@@ -137,31 +144,36 @@ async def _compute_second_by_second_metrics(activity_id: int, activity: Activity
             if idx is not None:
                 key_map[idx] = key
 
-        # Find indices for power and HR
-        power_idx: int | None = None
-        hr_idx: int | None = None
-        for idx, key in key_map.items():
-            if key == "directPower" or key == "power":
-                power_idx = idx
-            elif key == "directHeartRate" or key == "heartRate":
-                hr_idx = idx
-
-        if power_idx is None and hr_idx is None:
-            return
-
+        # Convert raw metrics arrays into named dicts
+        raw_records: list[dict] = []
         for metric in detail_metrics:
             metrics_list = metric.get("metrics", [])
-            record: dict = {"power": None, "heartRate": None}
-            if power_idx is not None and power_idx < len(metrics_list):
-                val = metrics_list[power_idx]
-                record["power"] = int(val) if val is not None else None
-            if hr_idx is not None and hr_idx < len(metrics_list):
-                val = metrics_list[hr_idx]
-                record["heartRate"] = int(val) if val is not None else None
-            records.append(record)
+            record = {}
+            for idx, key in key_map.items():
+                if idx < len(metrics_list):
+                    record[key] = metrics_list[idx]
+            raw_records.append(record)
 
-        if not records:
+        if not raw_records:
             return
+
+        # Normalize to the keys that compute_decoupling/hr_recovery expect
+        records: list[dict] = []
+        for r in raw_records:
+            power = r.get("directPower") or r.get("power")
+            hr = r.get("directHeartRate") or r.get("heartRate")
+            records.append({
+                "power": int(power) if power is not None else None,
+                "heartRate": int(hr) if hr is not None else None,
+            })
+
+        logger.info(
+            "Activity %s: %d records, %d with power, %d with HR",
+            activity_id,
+            len(records),
+            sum(1 for r in records if r["power"] is not None and r["power"] > 0),
+            sum(1 for r in records if r["heartRate"] is not None and r["heartRate"] > 0),
+        )
 
         decoupling = compute_decoupling(records)
         if decoupling is not None:
@@ -173,9 +185,9 @@ async def _compute_second_by_second_metrics(activity_id: int, activity: Activity
             activity.hr_recovery_60s = hr_recovery.get("drop_60s")
 
         logger.info(
-            "Activity %s: decoupling=%.2f%%, hr_recovery_30s=%s, hr_recovery_60s=%s",
+            "Activity %s: decoupling=%s, hr_recovery_30s=%s, hr_recovery_60s=%s",
             activity_id,
-            decoupling if decoupling is not None else 0,
+            f"{decoupling:.2f}%" if decoupling is not None else "N/A",
             activity.hr_recovery_30s,
             activity.hr_recovery_60s,
         )

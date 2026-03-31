@@ -166,7 +166,7 @@ export default function ActivityDetailPage() {
         <G>
           <Label>Blocchi di Potenza ({lapData.length} laps)</Label>
           {/* Chart: time-proportional power bars + HR curve inside */}
-          <div className="relative mt-1 overflow-hidden" style={{ height: chartHeight }}>
+          <div className="relative mt-1" style={{ height: chartHeight }}>
             {/* Power bars */}
             <div className="flex items-end gap-px absolute inset-0"
               onClick={(e) => { if (e.target === e.currentTarget) setSelectedLap(null) }}>

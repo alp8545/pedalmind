@@ -157,6 +157,7 @@ export default function ActivityDetailPage() {
         return (
         <G>
           <Label>Blocchi di Potenza ({lapData.length} laps)</Label>
+          {/* Chart area: bars + HR curve + time axis */}
           <div className="relative mt-1" style={{ height: chartHeight }}>
             {/* Power bars */}
             <div className="flex items-end gap-px absolute inset-0">
@@ -167,13 +168,15 @@ export default function ActivityDetailPage() {
                 return (
                   <div key={i} className="relative group flex flex-col justify-end"
                     style={{ width: `${widthPct}%`, height: '100%' }}>
-                    <div className="rounded-t-sm transition-opacity group-hover:opacity-80"
-                      style={{ height: `${heightPct}%`, background: color, minHeight: 4 }} />
-                    {widthPct > 6 && (
-                      <div className="font-mono text-center text-slate-500 absolute -bottom-3.5 left-0 right-0" style={{ fontSize: 8 }}>
-                        {fmtDuration(d.durationSecs)}
-                      </div>
-                    )}
+                    <div className="rounded-t-sm transition-opacity group-hover:opacity-80 flex items-end justify-center overflow-hidden"
+                      style={{ height: `${heightPct}%`, background: color, minHeight: 8 }}>
+                      {/* Duration label inside the bar */}
+                      {widthPct > 5 && (
+                        <span className="font-mono text-white/70 pb-0.5 leading-none" style={{ fontSize: 8 }}>
+                          {fmtDuration(d.durationSecs)}
+                        </span>
+                      )}
+                    </div>
                     {/* Hover tooltip */}
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
                       <div className="rounded-lg p-2 font-mono whitespace-nowrap"
@@ -197,8 +200,19 @@ export default function ActivityDetailPage() {
               </svg>
             )}
           </div>
+          {/* Time axis under bars */}
+          <div className="flex gap-px mt-0.5">
+            {lapData.map((d, i) => {
+              const widthPct = (d.durationSecs / totalSecs) * 100
+              return (
+                <div key={i} className="font-mono text-center text-slate-500 overflow-hidden" style={{ width: `${widthPct}%`, fontSize: 8 }}>
+                  {widthPct > 4 ? fmtDuration(d.durationSecs) : ''}
+                </div>
+              )
+            })}
+          </div>
           {/* Legend */}
-          <div className="flex gap-3 mt-5 flex-wrap items-center">
+          <div className="flex gap-3 mt-2 flex-wrap items-center">
             {['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7'].map((z, i) => (
               <div key={z} className="flex items-center gap-1">
                 <div className="rounded-sm" style={{ width: 8, height: 8, background: ZONE_COLORS[i] }} />

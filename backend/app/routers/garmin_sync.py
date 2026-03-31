@@ -675,3 +675,59 @@ async def import_bulk_activities(
     await db.commit()
     logger.info("Bulk import: inserted=%d, skipped=%d, errors=%d", inserted, skipped, len(errors))
     return {"inserted": inserted, "skipped": skipped, "errors": errors[:20]}
+
+
+@router.post("/backfill-metrics")
+async def backfill_second_by_second_metrics(
+    limit: int = 30,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Backfill decoupling + HR recovery for existing cycling activities.
+
+    Processes the most recent `limit` cycling activities that are missing
+    decoupling data. Rate-limited by garmin_api_call (2s between calls).
+    """
+    result = await db.execute(
+        select(Activity)
+        .where(
+            Activity.decoupling.is_(None),
+            Activity.sport.in_(["cycling", "road_biking", "mountain_biking",
+                                "gravel_cycling", "indoor_cycling", "virtual_ride"]),
+            Activity.avg_power.isnot(None),
+            Activity.avg_hr.isnot(None),
+        )
+        .order_by(Activity.start_time.desc())
+        .limit(limit)
+    )
+    activities = result.scalars().all()
+
+    processed = 0
+    skipped = 0
+    errors = []
+
+    for activity in activities:
+        try:
+            await _compute_second_by_second_metrics(activity.id, activity)
+            if activity.decoupling is not None or activity.hr_recovery_30s is not None:
+                processed += 1
+                logger.info(
+                    "Backfill %s: decoupling=%.1f%%, hr_rec_60s=%s",
+                    activity.id,
+                    activity.decoupling or 0,
+                    activity.hr_recovery_60s,
+                )
+            else:
+                skipped += 1
+        except Exception as e:
+            errors.append(f"{activity.id}: {e}")
+            logger.warning("Backfill failed for %s: %s", activity.id, e)
+
+    await db.commit()
+
+    return {
+        "total": len(activities),
+        "processed": processed,
+        "skipped": skipped,
+        "errors": errors[:10],
+    }

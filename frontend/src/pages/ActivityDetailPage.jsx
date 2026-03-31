@@ -21,6 +21,7 @@ export default function ActivityDetailPage() {
   const [activity, setActivity] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [selectedLap, setSelectedLap] = useState(null)
 
   useEffect(() => {
     api(`/api/garmin/activities/${activityId}`)
@@ -167,29 +168,40 @@ export default function ActivityDetailPage() {
           {/* Chart: time-proportional power bars + HR curve inside */}
           <div className="relative mt-1 overflow-hidden" style={{ height: chartHeight }}>
             {/* Power bars */}
-            <div className="flex items-end gap-px absolute inset-0">
+            <div className="flex items-end gap-px absolute inset-0"
+              onClick={(e) => { if (e.target === e.currentTarget) setSelectedLap(null) }}>
               {lapData.map((d, i) => {
                 const widthPct = (d.durationSecs / totalSecs) * 100
                 const heightPct = d.avgPower > 0 ? Math.max((d.avgPower / maxPower) * 100, 8) : 8
                 const color = powerToColor(d.avgPower)
+                const isSelected = selectedLap === i
                 return (
-                  <div key={i} className="relative group flex flex-col justify-end"
-                    style={{ width: `${widthPct}%`, height: '100%' }}>
-                    <div className="rounded-t-sm transition-opacity group-hover:opacity-70"
-                      style={{ height: `${heightPct}%`, background: color, minHeight: 4 }} />
-                    {/* Tooltip on hover */}
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
-                      <div className="rounded-lg p-2 font-mono whitespace-nowrap"
-                        style={{ background: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 11 }}>
-                        <div className="font-semibold text-white">Lap {i + 1}</div>
-                        <div>Potenza: <span style={{ color }}>{d.avgPower}W</span></div>
-                        {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR}bpm</span></div>}
-                        <div>Durata: {fmtDuration(d.durationSecs)}</div>
-                        {d.speedKmh != null && <div>Vel: {d.speedKmh} km/h</div>}
-                        {d.cadence != null && <div>Cadenza: {d.cadence}rpm</div>}
-                        {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
+                  <div key={i} className="relative flex flex-col justify-end cursor-pointer"
+                    style={{ width: `${widthPct}%`, height: '100%' }}
+                    onClick={(e) => { e.stopPropagation(); setSelectedLap(isSelected ? null : i) }}>
+                    <div className="rounded-t-sm transition-opacity"
+                      style={{
+                        height: `${heightPct}%`, background: color, minHeight: 4,
+                        opacity: selectedLap != null && !isSelected ? 0.4 : 1,
+                        outline: isSelected ? '2px solid #fff' : 'none',
+                        outlineOffset: -1,
+                      }} />
+                    {/* Popup on click */}
+                    {isSelected && (
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10 pointer-events-none">
+                        <div className="rounded-lg p-2.5 font-mono whitespace-nowrap"
+                          style={{ background: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 12 }}>
+                          <div className="font-semibold text-white mb-1">Lap {i + 1}</div>
+                          <div>Potenza: <span style={{ color }}>{d.avgPower}W</span></div>
+                          {d.np != null && <div>NP: <span style={{ color }}>{d.np}W</span></div>}
+                          {d.avgHR != null && <div>FC: <span className="text-red-400">{d.avgHR} bpm</span></div>}
+                          <div>Durata: {fmtDuration(d.durationSecs)}</div>
+                          {d.speedKmh != null && <div>Vel: {d.speedKmh} km/h</div>}
+                          {d.cadence != null && <div>Cadenza: {d.cadence} rpm</div>}
+                          {d.elevGain != null && <div>Disliv: {d.elevGain}m</div>}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )
               })}

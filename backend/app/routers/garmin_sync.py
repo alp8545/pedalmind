@@ -21,7 +21,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.garth_client import (
     async_fetch_activities, async_fetch_activity_details,
-    garmin_api_call, get_bootstrap_debug,
+    garmin_api_call,
     GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
 )
 from app.models.database import Activity, AthleteProfile, User
@@ -38,9 +38,12 @@ DEFAULT_RESTING_HR = 57
 DEFAULT_WEIGHT = 68.0
 
 
-async def _get_athlete_constants(db: AsyncSession) -> dict:
+async def _get_athlete_constants(db: AsyncSession, user_id: str = None) -> dict:
     """Read athlete constants from AthleteProfile DB table, with defaults."""
-    result = await db.execute(select(AthleteProfile).limit(1))
+    query = select(AthleteProfile)
+    if user_id:
+        query = query.where(AthleteProfile.user_id == user_id)
+    result = await db.execute(query.limit(1))
     profile = result.scalar_one_or_none()
     if profile:
         return {
@@ -260,75 +263,6 @@ def _generate_analysis(activity: Activity, weight: float = DEFAULT_WEIGHT,
 # ---- Endpoints ----
 
 
-@router.get("/debug")
-async def garmin_debug():
-    """Debug endpoint: show garth token bootstrap status, API test, and filesystem state."""
-    from datetime import datetime, timezone
-    from app.core.garth_client import get_garth_client, _get_http_status
-
-    def _ts():
-        return datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
-
-    result = get_bootstrap_debug()
-    debug_log: list[str] = []
-
-    # Env var preview
-    garth_tokens_env = os.environ.get("GARTH_TOKENS", "")
-    if garth_tokens_env:
-        result["garth_tokens_env_preview"] = garth_tokens_env[:50] + "..."
-
-    # --- Step 1: bootstrap ---
-    api_test: dict = {"status": "not_tested"}
-    try:
-        debug_log.append(f"[{_ts()}] Calling get_garth_client()...")
-        client = await asyncio.to_thread(get_garth_client)
-        api_test["bootstrap"] = "ok"
-        debug_log.append(f"[{_ts()}] Bootstrap OK")
-    except Exception as boot_err:
-        api_test["bootstrap"] = "failed"
-        api_test["error"] = str(boot_err)
-        api_test["traceback"] = traceback.format_exc()
-        debug_log.append(f"[{_ts()}] Bootstrap FAILED: {boot_err}")
-        result["api_test_result"] = api_test
-        result["debug_log"] = debug_log
-        result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
-        return result
-
-    # --- Step 2: dump oauth2_token details ---
-    try:
-        tok = client.client.oauth2_token
-        api_test["oauth2_token"] = {
-            "access_token_preview": tok.access_token[:20] + "...",
-            "expires_at": tok.expires_at,
-            "expires_at_human": datetime.fromtimestamp(tok.expires_at, tz=timezone.utc).isoformat(),
-            "is_expired": tok.expired,
-            "refresh_token_preview": tok.refresh_token[:20] + "..." if tok.refresh_token else None,
-            "refresh_token_expired": tok.refresh_expired,
-        }
-        debug_log.append(f"[{_ts()}] Token expires_at={tok.expires_at} expired={tok.expired}")
-    except Exception as e:
-        api_test["oauth2_token"] = {"error": str(e)}
-        debug_log.append(f"[{_ts()}] Failed to read oauth2_token: {e}")
-
-    # --- Step 3: test API call via rate-limited path (BUG-14 fix) ---
-    debug_log.append(f"[{_ts()}] Testing GET {API_TEST_URL}?limit=1 (rate-limited)...")
-    try:
-        activities = await garmin_api_call(API_TEST_URL, params={"limit": 1})
-        count = len(activities) if isinstance(activities, list) else "non-list"
-        api_test["activity_test"] = {"status": "ok", "url": API_TEST_URL, "activities_returned": count}
-        api_test["status"] = "ok"
-        debug_log.append(f"[{_ts()}] Activity test OK, returned {count}")
-    except Exception as act_err:
-        api_test["activity_test"] = {"status": "failed", "url": API_TEST_URL, "error": str(act_err)}
-        api_test["status"] = "activity_test_failed"
-        debug_log.append(f"[{_ts()}] Activity test FAILED: {act_err}")
-
-    result["api_test_result"] = api_test
-    result["debug_log"] = debug_log
-    result["bootstrap_log"] = get_bootstrap_debug()["bootstrap_log"]
-
-    return result
-
 
 @router.post("/auth/reset")
 async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
@@ -377,7 +311,7 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
 @router.post("/sync/last")
 async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download the latest activity from Garmin and save to DB."""
-    constants = await _get_athlete_constants(db)
+    constants = await _get_athlete_constants(db, user_id=current_user.id)
 
     try:
         activities = await async_fetch_activities(days=3, limit=5)
@@ -431,7 +365,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User 
 @router.post("/sync/weeks/{weeks}")
 async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download all activities from the last N weeks."""
-    constants = await _get_athlete_constants(db)
+    constants = await _get_athlete_constants(db, user_id=current_user.id)
     days = weeks * 7
 
     try:
@@ -567,7 +501,7 @@ async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db),
     if not activity:
         raise HTTPException(status_code=404, detail="Attivita non trovata")
 
-    constants = await _get_athlete_constants(db)
+    constants = await _get_athlete_constants(db, user_id=current_user.id)
     analysis = _generate_analysis(
         activity,
         weight=constants["weight"],

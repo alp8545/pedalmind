@@ -41,7 +41,7 @@ async def get_current_user(
         detail="Invalid or expired token",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    logger.info("JWT auth on %s %s — token: %s...", request.method, request.url.path, token[:20] if token else "NONE")
+    logger.info("JWT auth on %s %s", request.method, request.url.path)
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
         user_id: str | None = payload.get("sub")

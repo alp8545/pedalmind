@@ -10,14 +10,19 @@ import logging
 from typing import Optional
 
 import anthropic
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-
+from app.core.security import get_current_user
 from app.core.config import settings
+from app.models.database import User
 
 logger = logging.getLogger(__name__)
 
@@ -324,10 +329,13 @@ def _convert_steps_to_dicts(steps: list[WorkoutStep]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def _get_interpret_prompt(db: AsyncSession) -> str:
+async def _get_interpret_prompt(db: AsyncSession, user_id: str = None) -> str:
     """Build the interpreter system prompt with real athlete data from DB (BUG-20 fix)."""
     from app.models.database import AthleteProfile
-    result = await db.execute(select(AthleteProfile).limit(1))
+    query = select(AthleteProfile)
+    if user_id:
+        query = query.where(AthleteProfile.user_id == user_id)
+    result = await db.execute(query.limit(1))
     profile = result.scalar_one_or_none()
 
     ftp = profile.ftp_watts if profile and profile.ftp_watts else 265
@@ -360,12 +368,13 @@ async def _get_interpret_prompt(db: AsyncSession) -> str:
 
 
 @router.post("/interpret", response_model=WorkoutStructured)
-async def interpret_workout(req: WorkoutInterpretRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("20/minute")
+async def interpret_workout(request: Request, req: WorkoutInterpretRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Use Anthropic Haiku to interpret a natural-language workout description."""
     if not settings.ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
-    system_prompt = await _get_interpret_prompt(db)
+    system_prompt = await _get_interpret_prompt(db, user_id=current_user.id)
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     user_prompt = f"Interpret this workout: {req.description}\nSport: {req.sport}"
@@ -379,7 +388,7 @@ async def interpret_workout(req: WorkoutInterpretRequest, db: AsyncSession = Dep
         )
     except anthropic.APIError as exc:
         logger.exception("Anthropic API error during workout interpretation")
-        raise HTTPException(status_code=502, detail=f"AI service error: {exc}") from exc
+        raise HTTPException(status_code=502, detail="AI service temporarily unavailable") from exc
 
     raw_text = message.content[0].text.strip()
     # Strip markdown fences if present
@@ -410,7 +419,7 @@ class WorkoutUploadResponse(BaseModel):
 
 
 @router.post("/upload")
-async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(get_db)):
+async def upload_workout(req: WorkoutUploadRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Save workout to DB, then attempt Garmin upload as best-effort.
 
     The workout is ALWAYS saved locally (for Piano Settimanale) regardless
@@ -501,6 +510,7 @@ async def upload_workout(req: WorkoutUploadRequest, db: AsyncSession = Depends(g
 @router.get("/week")
 async def get_week_workouts(
     start_date: str = None,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List scheduled workouts for a given week (Mon-Sun).
@@ -550,7 +560,7 @@ async def get_week_workouts(
 
 
 @router.get("/{workout_id}")
-async def get_workout_detail(workout_id: str, db: AsyncSession = Depends(get_db)):
+async def get_workout_detail(workout_id: str, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Get full workout details including steps."""
     from app.models.database import ScheduledWorkout
 

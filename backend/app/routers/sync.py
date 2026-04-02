@@ -9,7 +9,11 @@ later via POST /api/rides/:id/reanalyze.
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,7 +153,9 @@ async def _import_activities(
 
 
 @router.post("/recent", response_model=SyncResult)
+@limiter.limit("10/minute")
 async def sync_recent(
+    request: Request,
     weeks: int = Query(default=3, ge=1, le=12),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -171,7 +177,9 @@ async def sync_recent(
 
 
 @router.post("/latest", response_model=SyncResult)
+@limiter.limit("10/minute")
 async def sync_latest(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

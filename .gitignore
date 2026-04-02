@@ -11,3 +11,5 @@ dist/
 *.FIT
 .DS_Store
 .vercel
+.claude/
+.gstack/

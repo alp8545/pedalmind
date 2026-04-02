@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440
     FRONTEND_URL: str = "http://localhost:5173"
+    ALLOWED_EMAILS: str = ""  # comma-separated allowlist; empty = open registration
 
     @model_validator(mode="after")
     def fix_database_url(self):

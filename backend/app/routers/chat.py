@@ -2,7 +2,11 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -245,23 +249,8 @@ async def _get_conversation_history(conv_id: str, db: AsyncSession) -> list[dict
 
 @router.get("/health")
 async def chat_health():
-    """Health check: verify Anthropic API key and test a minimal call."""
-    from ai_engine.service import test_api_key
-
-    result = {
-        "anthropic_key_set": bool(settings.ANTHROPIC_API_KEY),
-        "anthropic_key_length": len(settings.ANTHROPIC_API_KEY),
-        "model_chat": settings.AI_MODEL_CHAT,
-        "model_analysis": settings.AI_MODEL_ANALYSIS,
-    }
-
-    if settings.ANTHROPIC_API_KEY:
-        test = await test_api_key(settings.ANTHROPIC_API_KEY)
-        result["test_call"] = test
-    else:
-        result["test_call"] = {"status": "skipped", "reason": "ANTHROPIC_API_KEY not set"}
-
-    return result
+    """Health check: verify chat service is operational."""
+    return {"status": "ok"}
 
 
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -314,7 +303,9 @@ async def get_messages(
 
 
 @router.post("/conversations/{conv_id}/messages", response_model=SendMessageResponse)
+@limiter.limit("20/minute")
 async def send_message(
+    request: Request,
     conv_id: str,
     body: SendMessageRequest,
     current_user: User = Depends(get_current_user),
@@ -371,7 +362,7 @@ async def send_message(
     except Exception as e:
         logger.exception("send_message: AI call failed for conversation %s: %s", conv_id, e)
         await db.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AI service error: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="AI service temporarily unavailable")
 
     # Store assistant message
     assistant_msg = ChatMessage(

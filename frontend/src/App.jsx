@@ -1,16 +1,14 @@
-import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Nav from './components/Nav'
 import UpdateBanner from './components/UpdateBanner'
-
-const LoginPage = lazy(() => import('./pages/LoginPage'))
-const DashboardPage = lazy(() => import('./pages/DashboardPage'))
-const RideDetailPage = lazy(() => import('./pages/RideDetailPage'))
-const ActivityDetailPage = lazy(() => import('./pages/ActivityDetailPage'))
-const ChatPage = lazy(() => import('./pages/ChatPage'))
-const SeasonPage = lazy(() => import('./pages/SeasonPage'))
-const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+import LoginPage from './pages/LoginPage'
+import DashboardPage from './pages/DashboardPage'
+import RideDetailPage from './pages/RideDetailPage'
+import ActivityDetailPage from './pages/ActivityDetailPage'
+import ChatPage from './pages/ChatPage'
+import SeasonPage from './pages/SeasonPage'
+import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -41,7 +39,6 @@ export default function App() {
       {user && <Nav />}
       <UpdateBanner />
       <main className={user ? 'pb-28' : ''} style={user ? { paddingTop: 'calc(env(safe-area-inset-top, 12px) + 36px)' } : undefined}>
-        <Suspense fallback={<div className="flex items-center justify-center h-screen text-slate-400 font-mono text-sm">Caricamento...</div>}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
@@ -52,7 +49,6 @@ export default function App() {
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        </Suspense>
       </main>
     </div>
   )

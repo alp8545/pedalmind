@@ -1,4 +1,5 @@
 const ZONE_COLORS = ['#475569', '#3b82f6', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#8b5cf6']
+const ZONE_LABELS = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7']
 
 export default function ZoneBar({ zone, pct, time, color }) {
   const c = color || ZONE_COLORS[zone - 1] || '#64748b'
@@ -13,4 +14,4 @@ export default function ZoneBar({ zone, pct, time, color }) {
   )
 }
 
-export { ZONE_COLORS }
+export { ZONE_COLORS, ZONE_LABELS }

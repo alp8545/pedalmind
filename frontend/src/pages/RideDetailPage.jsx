@@ -3,8 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { api } from '../api'
 import { G } from '../components/ui'
-import { ZONE_COLORS } from '../components/charts/ZoneBar'
-const ZONE_LABELS = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7']
+import { ZONE_COLORS, ZONE_LABELS } from '../components/charts/ZoneBar'
 const ZONE_KEYS = ['z1_recovery', 'z2_endurance', 'z3_tempo', 'z4_threshold', 'z5_vo2max', 'z6_anaerobic', 'z7_neuromuscular']
 
 const SCORE_COLORS = { 1: '#ef4444', 2: '#ef4444', 3: '#f97316', 4: '#f97316', 5: '#eab308', 6: '#eab308', 7: '#84cc16', 8: '#22c55e', 9: '#22c55e', 10: '#22c55e' }
@@ -38,8 +37,8 @@ export default function RideDetailPage() {
     setReanalyzing(false)
   }
 
-  if (loading) return <div className="text-center py-12 text-slate-500">Loading...</div>
-  if (!ride) return <div className="text-center py-12 text-slate-500">Ride not found</div>
+  if (loading) return <div className="text-center py-12 text-slate-500">Caricamento...</div>
+  if (!ride) return <div className="text-center py-12 text-slate-500">Uscita non trovata</div>
 
   const s = ride.ride_data_json?.summary || {}
   const analysis = ride.analysis_json
@@ -54,42 +53,47 @@ export default function RideDetailPage() {
   const totalZoneSec = zoneData.reduce((a, b) => a + b.seconds, 0)
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      <Link to="/" className="text-sm text-sky-400 hover:underline mb-4 inline-block">&larr; Back to rides</Link>
+    <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-4">
+      <Link to="/" className="text-amber-400 hover:underline inline-block font-mono" style={{ fontSize: 13 }}>{'\u2190'} Torna alle uscite</Link>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white">
-          {new Date(ride.ride_date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-        </h1>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="font-mono text-slate-400 uppercase" style={{ fontSize: 12, letterSpacing: 1 }}>
+            {new Date(ride.ride_date).toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase()}
+          </div>
+          <h1 className="text-xl font-light text-slate-50 mt-0.5" style={{ letterSpacing: -0.5 }}>
+            {new Date(ride.ride_date).toLocaleDateString('it-IT', { weekday: 'long' })}
+          </h1>
+        </div>
         <button
           onClick={handleReanalyze}
           disabled={reanalyzing}
-          className="text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+          className="px-3 py-1.5 rounded-lg text-sm bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 disabled:opacity-50 transition-colors font-mono"
         >
-          {reanalyzing ? 'Analyzing...' : 'Reanalyze'}
+          {reanalyzing ? 'Analisi...' : 'Rianalizza'}
         </button>
       </div>
 
       {/* Metrics grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <Metric label="Distance" value={`${s.distance_km?.toFixed(1)} km`} />
-        <Metric label="Duration" value={`${Math.round((s.duration_sec || 0) / 60)} min`} />
-        <Metric label="Avg Power" value={s.avg_power_w ? `${s.avg_power_w}W` : '-'} />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Metric label="Distanza" value={`${s.distance_km?.toFixed(1)} km`} />
+        <Metric label="Durata" value={`${Math.round((s.duration_sec || 0) / 60)} min`} />
+        <Metric label="Potenza Media" value={s.avg_power_w ? `${s.avg_power_w}W` : '-'} />
         <Metric label="NP" value={s.normalized_power_w ? `${s.normalized_power_w}W` : '-'} />
         <Metric label="TSS" value={s.training_stress_score?.toFixed(0) ?? '-'} />
         <Metric label="IF" value={s.intensity_factor?.toFixed(2) ?? '-'} />
-        <Metric label="Avg HR" value={s.avg_hr ? `${s.avg_hr} bpm` : '-'} />
-        <Metric label="Max HR" value={s.max_hr ? `${s.max_hr} bpm` : '-'} />
-        <Metric label="Elevation" value={s.elevation_gain_m ? `${s.elevation_gain_m}m` : '-'} />
-        <Metric label="Cadence" value={s.avg_cadence ? `${s.avg_cadence} rpm` : '-'} />
+        <Metric label="FC Media" value={s.avg_hr ? `${s.avg_hr} bpm` : '-'} />
+        <Metric label="FC Max" value={s.max_hr ? `${s.max_hr} bpm` : '-'} />
+        <Metric label="Dislivello" value={s.elevation_gain_m ? `${s.elevation_gain_m}m` : '-'} />
+        <Metric label="Cadenza" value={s.avg_cadence ? `${s.avg_cadence} rpm` : '-'} />
         <Metric label="Decoupling" value={ride.ride_data_json?.cardiac_decoupling_pct != null ? `${ride.ride_data_json.cardiac_decoupling_pct.toFixed(1)}%` : '-'} />
       </div>
 
       {/* Power curve */}
       {powerCurve && Object.values(powerCurve).some(v => v != null) && (
-        <G className="mb-6">
-          <h2 className="text-base font-semibold text-white mb-3">Power Curve</h2>
+        <G>
+          <h2 className="text-base font-semibold text-white mb-3">Curva di Potenza</h2>
           <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 text-sm text-center">
             {Object.entries(powerCurve).filter(([, v]) => v != null).map(([k, v]) => (
               <div key={k} className="bg-slate-800 rounded-lg p-2">
@@ -103,15 +107,15 @@ export default function RideDetailPage() {
 
       {/* Power zones chart */}
       {zoneData.length > 0 && totalZoneSec > 0 && (
-        <G className="mb-6">
-          <h2 className="text-base font-semibold text-white mb-3">Power Zones</h2>
+        <G>
+          <h2 className="text-base font-semibold text-white mb-3">Zone di Potenza</h2>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={zoneData}>
               <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / totalZoneSec * 100)}%`} />
               <Tooltip
                 contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '8px', color: '#e2e8f0', fontSize: '13px' }}
-                formatter={(v) => [`${Math.round(v / totalZoneSec * 100)}% (${Math.round(v / 60)}min)`, 'Time']}
+                formatter={(v) => [`${Math.round(v / totalZoneSec * 100)}% (${Math.round(v / 60)}min)`, 'Tempo']}
               />
               <Bar dataKey="seconds" radius={[4, 4, 0, 0]}>
                 {zoneData.map((_, i) => <Cell key={i} fill={ZONE_COLORS[i]} />)}
@@ -124,7 +128,7 @@ export default function RideDetailPage() {
       {/* AI Analysis */}
       {analysis && (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-white">AI Analysis</h2>
+          <h2 className="text-lg font-semibold text-white">Analisi AI</h2>
 
           {/* Summary + ride type */}
           <G>
@@ -176,7 +180,7 @@ export default function RideDetailPage() {
 
       {!analysis && (
         <G className="text-center text-slate-500 text-sm">
-          No AI analysis available. Click "Reanalyze" to generate one.
+          Nessuna analisi AI disponibile. Premi &quot;Rianalizza&quot; per generarne una.
         </G>
       )}
     </div>

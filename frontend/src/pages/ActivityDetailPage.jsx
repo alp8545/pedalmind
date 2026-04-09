@@ -3,9 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ComposedChart } from 'recharts'
 import { api } from '../api'
 import { G, Label } from '../components/ui'
-import ZoneBar, { ZONE_COLORS } from '../components/charts/ZoneBar'
-
-const ZONE_LABELS = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7']
+import ZoneBar, { ZONE_COLORS, ZONE_LABELS } from '../components/charts/ZoneBar'
 
 function fmtDuration(secs) {
   if (!secs) return '\u2014'

@@ -44,13 +44,13 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <G className="!p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-white">{isRegister ? 'Create Account' : 'Sign In'}</h2>
+          <h2 className="text-lg font-semibold text-white">{isRegister ? 'Crea Account' : 'Accedi'}</h2>
 
           {error && <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 text-sm text-red-400">{error}</div>}
 
           {isRegister && (
             <div>
-              <label className="block text-sm text-slate-400 mb-1">Name</label>
+              <label className="block text-sm text-slate-400 mb-1">Nome</label>
               <input
                 type="text"
                 value={name}
@@ -90,13 +90,13 @@ export default function LoginPage() {
             className="w-full disabled:opacity-50 font-medium py-2 rounded-[10px] transition-colors text-sm"
             style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}
           >
-            {loading ? '...' : isRegister ? 'Register' : 'Sign In'}
+            {loading ? '...' : isRegister ? 'Registrati' : 'Accedi'}
           </button>
 
           <p className="text-center text-sm text-slate-500">
-            {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
+            {isRegister ? 'Hai gia un account?' : 'Non hai un account?'}{' '}
             <button type="button" onClick={() => { setIsRegister(!isRegister); setError('') }} className="text-amber-400 hover:underline font-mono">
-              {isRegister ? 'Sign In' : 'Register'}
+              {isRegister ? 'Accedi' : 'Registrati'}
             </button>
           </p>
           </G>

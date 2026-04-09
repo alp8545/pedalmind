@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
         logger.info("Database tables ready")
     except Exception as exc:
         logger.warning("Could not initialise database tables: %s", exc)
+
+    # Proactive Garmin token refresh — don't block startup if it fails
+    try:
+        from app.core.garth_client import proactive_token_refresh
+        await proactive_token_refresh()
+    except Exception as exc:
+        logger.warning("Garmin token warmup skipped: %s", exc)
+
     yield
 
 

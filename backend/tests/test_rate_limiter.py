@@ -38,6 +38,69 @@ class TestNeedsRefresh:
         garth.client.oauth2_token = original
 
 
+class TestEnsureAuth:
+    """Test the auth flow, especially fallback to fresh login."""
+
+    def setup_method(self):
+        import app.core.garth_client as gc
+        gc._client_ready = False
+        gc._auth_failure_until = 0
+        gc._auth_failure_count = 0
+        gc._bootstrap_log.clear()
+
+    @patch("app.core.garth_client._TOKEN_DIR")
+    @patch("app.core.garth_client.garth")
+    def test_dead_tokens_fall_through_to_fresh_login(self, mock_garth, mock_token_dir):
+        """When OAuth1 is invalid (non-429 error), should wipe tokens and try fresh login."""
+        import app.core.garth_client as gc
+
+        # Simulate: token dir exists with files
+        mock_token_dir.exists.return_value = True
+        mock_token_dir.iterdir.return_value = [MagicMock()]  # non-empty
+
+        # Resume works, but token needs refresh
+        mock_garth.resume.return_value = None
+        mock_garth.client.oauth2_token = MagicMock(expires_at=0)
+
+        # Refresh fails with 401 (token invalid, NOT rate limited)
+        mock_garth.client.refresh_oauth2.side_effect = Exception("401 Unauthorized")
+        # Old token check also fails
+        mock_garth.connectapi.side_effect = Exception("401 Unauthorized")
+
+        # Fresh login succeeds
+        mock_garth.login.return_value = None
+        mock_garth.save.return_value = None
+
+        gc.settings.GARMIN_EMAIL = "test@test.com"
+        gc.settings.GARMIN_PASSWORD = "pass"
+
+        _ensure_auth()
+        assert gc._client_ready is True
+        mock_garth.login.assert_called_once()
+
+    @patch("app.core.garth_client._TOKEN_DIR")
+    @patch("app.core.garth_client.garth")
+    def test_rate_limited_refresh_does_not_try_login(self, mock_garth, mock_token_dir):
+        """When refresh fails with 429, should NOT try fresh login (would make it worse)."""
+        import app.core.garth_client as gc
+
+        mock_token_dir.exists.return_value = True
+        mock_token_dir.iterdir.return_value = [MagicMock()]
+
+        mock_garth.resume.return_value = None
+        mock_garth.client.oauth2_token = MagicMock(expires_at=0)
+
+        # Refresh fails with 429
+        mock_garth.client.refresh_oauth2.side_effect = Exception("429 Too Many Requests")
+        mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
+
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            _ensure_auth()
+
+        mock_garth.login.assert_not_called()
+        assert gc._auth_failure_count == 1
+
+
 class TestSyncApiCall:
     """Test the rate-limited API call logic."""
 

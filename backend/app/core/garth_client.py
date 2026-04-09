@@ -99,11 +99,45 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "429" in str(exc)
 
 
+def _is_token_invalid(exc: Exception) -> bool:
+    """Check if an exception means the token is permanently invalid (401/403)."""
+    if isinstance(exc, GarthHTTPError):
+        response = getattr(exc.error, "response", None)
+        if response is not None and response.status_code in (401, 403):
+            return True
+    for code in ("401", "403", "Unauthorized", "Forbidden"):
+        if code in str(exc):
+            return True
+    return False
+
+
+def _try_fresh_login() -> bool:
+    """Attempt fresh login with email/password. Returns True on success."""
+    global _auth_failure_count, _client_ready
+    if not settings.GARMIN_EMAIL or not settings.GARMIN_PASSWORD:
+        _bootstrap_log.append("No GARMIN_EMAIL/PASSWORD for fresh login")
+        return False
+    _bootstrap_log.append("Attempting fresh login...")
+    try:
+        garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
+        _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+        garth.save(str(_TOKEN_DIR))
+        _auth_failure_count = 0
+        _client_ready = True
+        _bootstrap_log.append("Fresh login successful")
+        return True
+    except Exception as login_err:
+        _bootstrap_log.append(f"Fresh login failed: {login_err}")
+        return False
+
+
 def _ensure_auth():
     """Ensure garth has a valid session. Called synchronously from thread pool.
 
-    Handles token decode, resume, refresh, and fresh login.
-    Never tries fresh login as fallback for failed refresh (prevents 429 spiral).
+    Handles token decode, resume, refresh, and fresh login fallback.
+    Auth flow: resume saved tokens -> refresh via OAuth1 -> fresh login.
+    Only falls back to fresh login when refresh fails with non-429 error
+    (rate-limited refresh should wait, not escalate to sso.garmin.com).
     """
     global _auth_failure_until, _auth_failure_count, _client_ready
 
@@ -120,7 +154,7 @@ def _ensure_auth():
 
     # Decode GARTH_TOKENS env var to disk on first run, or if dir is empty
     if not _TOKEN_DIR.exists() or not any(_TOKEN_DIR.iterdir()):
-        _decode_garth_tokens()  # BUG-4 fix: also decode if dir is empty
+        _decode_garth_tokens()
 
     # Try resume from token dir
     if _TOKEN_DIR.exists() and any(_TOKEN_DIR.iterdir()):
@@ -141,7 +175,7 @@ def _ensure_auth():
                 return
             except Exception as refresh_err:
                 _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
-                # Check if old token still works
+                # Check if old token still works (might have generous expiry buffer)
                 try:
                     garth.connectapi(
                         "/activitylist-service/activities/search/activities",
@@ -152,26 +186,30 @@ def _ensure_auth():
                     return
                 except Exception:
                     pass
-                _engage_backoff(f"refresh failed: {refresh_err}")
-                raise RuntimeError(f"Token refresh failed: {refresh_err}")
+
+                # Rate-limited refresh: backoff and wait, don't escalate
+                if _is_rate_limit(refresh_err):
+                    _engage_backoff(f"refresh rate-limited: {refresh_err}")
+                    raise RuntimeError(f"Token refresh rate-limited: {refresh_err}")
+
+                # Non-rate-limit failure (401/403/network): token is dead.
+                # Wipe stale tokens and fall through to fresh login.
+                _bootstrap_log.append("OAuth1 token appears invalid, clearing stale tokens")
+                for f in _TOKEN_DIR.iterdir():
+                    f.unlink()
         else:
             _client_ready = True
             return
 
-    # No tokens — fresh login
-    if not settings.GARMIN_EMAIL or not settings.GARMIN_PASSWORD:
-        raise RuntimeError("No GARTH_TOKENS, no saved tokens, no GARMIN_EMAIL/PASSWORD")
-    _bootstrap_log.append("Attempting fresh login...")
-    try:
-        garth.login(settings.GARMIN_EMAIL, settings.GARMIN_PASSWORD)
-        _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-        garth.save(str(_TOKEN_DIR))
-        _auth_failure_count = 0
-        _client_ready = True
-        _bootstrap_log.append("Fresh login successful")
-    except Exception as login_err:
-        _engage_backoff(f"fresh login failed: {login_err}")
-        raise RuntimeError(f"Fresh login failed: {login_err}")
+    # No valid tokens — fresh login as last resort
+    if _try_fresh_login():
+        return
+
+    _engage_backoff("all auth methods failed")
+    raise RuntimeError(
+        "Garmin auth failed: token refresh failed and fresh login failed. "
+        "Inject fresh tokens via POST /garmin/auth/inject-tokens"
+    )
 
 
 def _sync_api_call(endpoint: str, method: str = "GET", **kwargs):
@@ -231,6 +269,16 @@ async def garmin_api_call(endpoint: str, method: str = "GET", **kwargs):
     """
     async with _garmin_lock:  # BUG-1 fix: one lock for everything
         return await asyncio.to_thread(_sync_api_call, endpoint, method, **kwargs)
+
+
+async def proactive_token_refresh():
+    """Attempt token refresh on startup. Non-fatal: logs but doesn't crash the app."""
+    try:
+        async with _garmin_lock:
+            await asyncio.to_thread(_ensure_auth)
+        logger.info("Proactive token refresh succeeded, client ready")
+    except Exception as e:
+        logger.warning("Proactive token refresh failed (non-fatal): %s", e)
 
 
 # ---- High-level helpers (all async, all go through garmin_api_call) ----

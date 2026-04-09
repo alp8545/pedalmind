@@ -301,10 +301,21 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
     import garth
     garth.resume(str(_TOKEN_DIR))
 
+    # Proactively refresh OAuth2 if expired
+    refresh_status = "skipped"
+    if garth.client.oauth2_token.expired:
+        try:
+            garth.client.refresh_oauth2()
+            garth.save(str(_TOKEN_DIR))
+            refresh_status = "refreshed"
+        except Exception as e:
+            refresh_status = f"refresh_failed: {e}"
+
     return {
         "message": "Tokens injected and session resumed",
         "access_token_expired": garth.client.oauth2_token.expired,
         "expires_at": garth.client.oauth2_token.expires_at,
+        "refresh_status": refresh_status,
     }
 
 

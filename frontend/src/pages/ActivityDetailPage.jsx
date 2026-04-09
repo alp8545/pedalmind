@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { BarChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, ComposedChart } from 'recharts'
 import { api } from '../api'
@@ -40,7 +40,7 @@ export default function ActivityDetailPage() {
   const duration = activity.duration_secs ? fmtDuration(activity.duration_secs) : null
 
   const laps = activity.splits_data?.lapDTOs || []
-  const lapData = useMemo(() => laps.map((lap, i) => ({
+  const lapData = laps.map((lap, i) => ({
     lap: i + 1,
     avgPower: lap.averagePower ? Math.round(lap.averagePower) : 0,
     avgHR: lap.averageHR ? Math.round(lap.averageHR) : null,
@@ -50,17 +50,17 @@ export default function ActivityDetailPage() {
     durationSecs: lap.duration || 0,
     cadence: lap.averageBikeCadence || lap.averageBikingCadence ? Math.round(lap.averageBikeCadence || lap.averageBikingCadence) : null,
     elevGain: lap.elevationGain ? Math.round(lap.elevationGain) : null,
-  })), [activity])
+  }))
 
   const powerZonesRaw = activity.raw_data?.powerTimeInZones || []
-  const totalZoneSecs = useMemo(() => powerZonesRaw.reduce((sum, z) => sum + (z.secsInZone || 0), 0), [activity])
-  const powerZoneData = useMemo(() => powerZonesRaw.map((z, i) => ({
+  const totalZoneSecs = powerZonesRaw.reduce((sum, z) => sum + (z.secsInZone || 0), 0)
+  const powerZoneData = powerZonesRaw.map((z, i) => ({
     zone: i + 1,
     label: ZONE_LABELS[i] || `Z${z.zoneNumber}`,
     seconds: z.secsInZone || 0,
     pct: totalZoneSecs > 0 ? +((z.secsInZone / totalZoneSecs) * 100).toFixed(1) : 0,
     lowBound: z.zoneLowBoundary || 0,
-  })), [activity, totalZoneSecs])
+  }))
 
   const FTP = 265
   const powerToColor = (w) => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { G } from '../components/ui'
 
 const POWER_METER_TYPES = [
   { value: '', label: 'Not set' },
@@ -101,7 +102,7 @@ export default function SettingsPage() {
               value={form.goals_text}
               onChange={e => update('goals_text', e.target.value)}
               rows={3}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500 resize-none"
+              className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono resize-none"
               placeholder="e.g. Increase FTP from 265W to 300W, reduce weight to 64kg"
             />
           </div>
@@ -115,7 +116,7 @@ export default function SettingsPage() {
               <select
                 value={form.power_meter_type}
                 onChange={e => update('power_meter_type', e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
               >
                 {POWER_METER_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -125,7 +126,7 @@ export default function SettingsPage() {
               <select
                 value={form.preferred_language}
                 onChange={e => update('preferred_language', e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
               >
                 {LANGUAGES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -138,7 +139,8 @@ export default function SettingsPage() {
           <button
             type="submit"
             disabled={saving}
-            className="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium px-6 py-2 rounded-lg transition-colors text-sm"
+            className="disabled:opacity-50 font-medium px-6 py-2 rounded-[10px] transition-colors text-sm"
+            style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}
           >
             {saving ? 'Saving...' : 'Save'}
           </button>
@@ -151,10 +153,10 @@ export default function SettingsPage() {
 
 function Section({ title, children }) {
   return (
-    <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+    <G>
       <h2 className="text-base font-semibold text-white mb-4">{title}</h2>
       {children}
-    </div>
+    </G>
   )
 }
 
@@ -166,7 +168,7 @@ function Field({ label, type = 'text', value, onChange, ...props }) {
         type={type}
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+        className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
         {...props}
       />
     </div>

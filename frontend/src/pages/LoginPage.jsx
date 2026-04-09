@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { G } from '../components/ui'
 
 export default function LoginPage() {
   const [isRegister, setIsRegister] = useState(false)
@@ -36,12 +37,13 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-950">
+    <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
-        <h1 className="text-3xl font-bold text-white text-center mb-2">PedalMind</h1>
-        <p className="text-slate-400 text-center text-sm mb-8">AI-powered cycling analytics</p>
+        <h1 className="text-3xl font-bold text-amber-500 text-center mb-2" style={{ letterSpacing: -0.5 }}>PedalMind</h1>
+        <p className="text-slate-400 text-center text-sm font-mono mb-8">AI-powered cycling analytics</p>
 
-        <form onSubmit={handleSubmit} className="bg-slate-900 rounded-xl p-6 border border-slate-800 space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <G className="!p-6 space-y-4">
           <h2 className="text-lg font-semibold text-white">{isRegister ? 'Create Account' : 'Sign In'}</h2>
 
           {error && <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 text-sm text-red-400">{error}</div>}
@@ -54,7 +56,7 @@ export default function LoginPage() {
                 value={name}
                 onChange={e => setName(e.target.value)}
                 required
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
               />
             </div>
           )}
@@ -66,7 +68,7 @@ export default function LoginPage() {
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+              className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
             />
           </div>
 
@@ -78,24 +80,26 @@ export default function LoginPage() {
               onChange={e => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+              className="w-full bg-[#0f172a] border border-slate-700/50 rounded-[10px] px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500/50 font-mono"
             />
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg transition-colors text-sm"
+            className="w-full disabled:opacity-50 font-medium py-2 rounded-[10px] transition-colors text-sm"
+            style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#0a0e1a' }}
           >
             {loading ? '...' : isRegister ? 'Register' : 'Sign In'}
           </button>
 
           <p className="text-center text-sm text-slate-500">
             {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
-            <button type="button" onClick={() => { setIsRegister(!isRegister); setError('') }} className="text-sky-400 hover:underline">
+            <button type="button" onClick={() => { setIsRegister(!isRegister); setError('') }} className="text-amber-400 hover:underline font-mono">
               {isRegister ? 'Sign In' : 'Register'}
             </button>
           </p>
+          </G>
         </form>
       </div>
     </div>

@@ -2,10 +2,10 @@ import { NavLink } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 const tabs = [
-  { to: '/', icon: '\u25C9', label: 'Home' },
-  { to: '/chat', icon: '\u25C8', label: 'Coach' },
-  { to: '/season', icon: '\u25CE', label: 'Piano' },
-  { to: '/settings', icon: '\u25B3', label: 'Settings' },
+  { to: '/', icon: '\u25C9', label: 'Home', ariaLabel: 'Home — Dashboard' },
+  { to: '/chat', icon: '\u25C8', label: 'Coach', ariaLabel: 'Coach — Chat AI' },
+  { to: '/season', icon: '\u25CE', label: 'Piano', ariaLabel: 'Piano — Stagione' },
+  { to: '/settings', icon: '\u25B3', label: 'Settings', ariaLabel: 'Impostazioni' },
 ]
 
 export default function Nav() {
@@ -25,6 +25,7 @@ export default function Nav() {
 
       {/* Bottom nav bar */}
       <nav
+        aria-label="Navigazione principale"
         className="fixed bottom-0 left-0 right-0 z-50 flex justify-around"
         style={{
           background: 'linear-gradient(180deg, transparent 0%, rgba(6,10,20,0.97) 30%)',
@@ -39,7 +40,8 @@ export default function Nav() {
             key={t.to}
             to={t.to}
             end={t.to === '/'}
-            className="flex flex-col items-center gap-1 transition-all"
+            aria-label={t.ariaLabel}
+            className="flex flex-col items-center gap-1 transition-all min-w-[44px] min-h-[44px] justify-center"
             style={({ isActive }) => ({ opacity: isActive ? 1 : 0.4, padding: '6px 0' })}
           >
             {({ isActive }) => (

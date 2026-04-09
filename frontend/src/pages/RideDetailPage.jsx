@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { api } from '../api'
-
-const ZONE_COLORS = ['#22c55e', '#84cc16', '#eab308', '#f97316', '#ef4444', '#a855f7', '#ec4899']
+import { G } from '../components/ui'
+import { ZONE_COLORS } from '../components/charts/ZoneBar'
 const ZONE_LABELS = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6', 'Z7']
 const ZONE_KEYS = ['z1_recovery', 'z2_endurance', 'z3_tempo', 'z4_threshold', 'z5_vo2max', 'z6_anaerobic', 'z7_neuromuscular']
 
@@ -88,7 +88,7 @@ export default function RideDetailPage() {
 
       {/* Power curve */}
       {powerCurve && Object.values(powerCurve).some(v => v != null) && (
-        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 mb-6">
+        <G className="mb-6">
           <h2 className="text-base font-semibold text-white mb-3">Power Curve</h2>
           <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 text-sm text-center">
             {Object.entries(powerCurve).filter(([, v]) => v != null).map(([k, v]) => (
@@ -98,12 +98,12 @@ export default function RideDetailPage() {
               </div>
             ))}
           </div>
-        </div>
+        </G>
       )}
 
       {/* Power zones chart */}
       {zoneData.length > 0 && totalZoneSec > 0 && (
-        <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 mb-6">
+        <G className="mb-6">
           <h2 className="text-base font-semibold text-white mb-3">Power Zones</h2>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={zoneData}>
@@ -118,7 +118,7 @@ export default function RideDetailPage() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </G>
       )}
 
       {/* AI Analysis */}
@@ -127,34 +127,34 @@ export default function RideDetailPage() {
           <h2 className="text-lg font-semibold text-white">AI Analysis</h2>
 
           {/* Summary + ride type */}
-          <div className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+          <G>
             {analysis.ride_type_detected && (
               <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-sky-500/20 text-sky-400 mb-2">
                 {analysis.ride_type_detected.replace(/_/g, ' ')}
               </span>
             )}
             <p className="text-slate-300 text-sm">{analysis.summary_text}</p>
-          </div>
+          </G>
 
           {/* Scores */}
           {analysis.scores && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {Object.entries(analysis.scores).map(([key, val]) => (
-                <div key={key} className="bg-slate-900 rounded-xl border border-slate-800 p-3 text-center">
+                <G key={key} className="!p-3 text-center">
                   <div className="text-xs text-slate-500 mb-1">{key.replace(/_/g, ' ')}</div>
                   <div className="text-2xl font-bold" style={{ color: SCORE_COLORS[val] || '#94a3b8' }}>{val}</div>
                   <div className="text-xs text-slate-600">/10</div>
-                </div>
+                </G>
               ))}
             </div>
           )}
 
           {/* Sections */}
           {analysis.sections?.map((sec, i) => (
-            <div key={i} className="bg-slate-900 rounded-xl border border-slate-800 p-4">
+            <G key={i}>
               <h3 className="text-sm font-semibold text-white mb-1">{sec.title}</h3>
               <p className="text-sm text-slate-400">{sec.content}</p>
-            </div>
+            </G>
           ))}
 
           {/* Flags */}
@@ -175,9 +175,9 @@ export default function RideDetailPage() {
       )}
 
       {!analysis && (
-        <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 text-center text-slate-500 text-sm">
+        <G className="text-center text-slate-500 text-sm">
           No AI analysis available. Click "Reanalyze" to generate one.
-        </div>
+        </G>
       )}
     </div>
   )
@@ -185,9 +185,9 @@ export default function RideDetailPage() {
 
 function Metric({ label, value }) {
   return (
-    <div className="bg-slate-900 rounded-xl border border-slate-800 p-3">
+    <G className="!p-3">
       <div className="text-xs text-slate-500 mb-0.5">{label}</div>
       <div className="text-lg font-semibold text-white">{value}</div>
-    </div>
+    </G>
   )
 }

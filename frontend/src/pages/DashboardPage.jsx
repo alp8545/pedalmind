@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -122,7 +122,7 @@ export default function DashboardPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-4">
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-[14px] text-sm font-medium shadow-lg font-mono ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}>
+        <div role="alert" aria-live="assertive" className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-[14px] text-sm font-medium shadow-lg font-mono ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-green-500/90 text-white'}`}>
           {toast.message}
         </div>
       )}
@@ -277,11 +277,11 @@ export default function DashboardPage() {
           </div>
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-3 mt-4">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs">Prev</button>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} aria-label="Pagina precedente"
+                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs min-w-[44px] min-h-[44px] flex items-center justify-center">Prev</button>
               <span className="font-mono text-slate-400" style={{ fontSize: 12 }}>{page}/{totalPages}</span>
-              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs">Next</button>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} aria-label="Pagina successiva"
+                className="font-mono text-slate-400 hover:text-white disabled:opacity-30 text-xs min-w-[44px] min-h-[44px] flex items-center justify-center">Next</button>
             </div>
           )}
         </div>
@@ -289,7 +289,7 @@ export default function DashboardPage() {
 
       {/* Workout Modal */}
       {workoutModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={e => { if (e.target === e.currentTarget) resetWorkoutModal() }}>
+        <ModalOverlay onClose={resetWorkoutModal}>
           <div className="w-full sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl mx-0 sm:mx-4"
             style={{ background: 'linear-gradient(135deg, rgba(12,18,32,0.98), rgba(6,10,20,0.98))', border: '1px solid rgba(148,163,184,0.12)', backdropFilter: 'blur(20px)' }}>
             <div className="p-5">
@@ -388,7 +388,7 @@ export default function DashboardPage() {
 
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
     </div>
   )
@@ -479,8 +479,36 @@ function WeeklySummary({ trends, loading }) {
   )
 }
 
+function ModalOverlay({ children, onClose }) {
+  const overlayRef = useRef(null)
+  useEffect(() => {
+    const el = overlayRef.current
+    if (!el) return
+    const focusable = el.querySelectorAll('button, input, textarea, select, [tabindex]:not([tabindex="-1"])')
+    if (focusable.length) focusable[0].focus()
+    const handleKey = (e) => {
+      if (e.key === 'Escape') { onClose(); return }
+      if (e.key !== 'Tab') return
+      const nodes = el.querySelectorAll('button, input, textarea, select, [tabindex]:not([tabindex="-1"])')
+      if (!nodes.length) return
+      const first = nodes[0], last = nodes[nodes.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [onClose])
+  return (
+    <div ref={overlayRef} role="dialog" aria-modal="true" aria-label="Carica workout"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      {children}
+    </div>
+  )
+}
+
 function Spinner({ size = 4 }) {
-  return <svg className={`animate-spin h-${size} w-${size}`} viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+  return <svg role="status" aria-label="Caricamento" className={`animate-spin h-${size} w-${size}`} viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
 }
 function DownloadIcon() {
   return <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 011 1v7.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L9 11.586V4a1 1 0 011-1z" /><path d="M3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" /></svg>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { G, Label } from '../components/ui'
 import DonutRing from '../components/charts/DonutRing'
+import { ZONE_COLORS } from '../components/charts/ZoneBar'
 
 const PHASES = [
   { n: 'BASE', c: '#3b82f6', a: true }, { n: 'BUILD', c: '#f59e0b', a: true },
@@ -13,8 +14,6 @@ const PRI_COLORS = { A: '#f59e0b', B: '#22d3ee', C: '#8b5cf6' }
 const DAY_LABELS = ['L', 'M', 'M', 'G', 'V', 'S', 'D']
 const DAY_NAMES = ['Lunedi', 'Martedi', 'Mercoledi', 'Giovedi', 'Venerdi', 'Sabato', 'Domenica']
 
-// Zone colors: Z1=gray Z2=blue Z3=green Z4=amber Z5=orange Z6=red Z7=purple
-const ZONE_COLORS = ['#475569', '#3b82f6', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#8b5cf6']
 const FTP = 265
 
 function zoneColor(step) {
@@ -230,7 +229,7 @@ function WeekPlan() {
           {/* Empty day indicators */}
           <div className="flex items-center justify-center gap-1 mt-3">
             {DAY_LABELS.map((d, i) => (
-              <div key={i} className="w-8 h-8 rounded-lg flex items-center justify-center font-mono"
+              <div key={i} className="w-11 h-11 rounded-lg flex items-center justify-center font-mono"
                 style={{ fontSize: 12, background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.06)' }}>
                 <span className="text-slate-400">{d}</span>
               </div>

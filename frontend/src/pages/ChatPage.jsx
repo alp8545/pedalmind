@@ -116,7 +116,7 @@ export default function ChatPage() {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto flex flex-col gap-3 pb-2">
+      <div role="log" aria-live="polite" className="flex-1 overflow-y-auto flex flex-col gap-3 pb-2">
         {messages.length === 0 && (
           <div className="text-center mt-20">
             <p className="text-slate-400 text-sm mb-1">Chiedi al tuo coach</p>
@@ -156,8 +156,8 @@ export default function ChatPage() {
       <div className="flex gap-1.5 mb-2 flex-wrap">
         {QUICK_REPLIES.map(q => (
           <button key={q} onClick={() => handleQuickReply(q)}
-            className="rounded-full px-2.5 py-1 font-mono text-amber-500 border border-amber-500/20 hover:bg-amber-500/10 transition-colors"
-            style={{ fontSize: 10, background: 'rgba(245,158,11,0.08)' }}>
+            className="rounded-full px-3 py-2 min-h-[44px] font-mono text-amber-500 border border-amber-500/20 hover:bg-amber-500/10 transition-colors flex items-center"
+            style={{ fontSize: 11, background: 'rgba(245,158,11,0.08)' }}>
             {q}
           </button>
         ))}

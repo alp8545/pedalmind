@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: pedalmind
+    runtime: docker
+    region: frankfurt
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PORT
+        value: "10000"
+      - key: AI_MODEL_ANALYSIS
+        value: claude-haiku-4-5-20251001
+      - key: AI_MODEL_CHAT
+        value: claude-sonnet-4-6
+      - key: FRONTEND_URL
+        value: https://pedalmind-web.vercel.app
+      - key: APP_BASE_URL
+        value: https://pedalmind.onrender.com
+      # Secrets — set manually via Render dashboard (sync: false keeps them out of git)
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GARMIN_EMAIL
+        sync: false
+      - key: GARMIN_PASSWORD
+        sync: false
+      - key: GARTH_TOKENS
+        sync: false

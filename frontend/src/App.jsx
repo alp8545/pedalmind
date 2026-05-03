@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import Nav from './components/Nav'
@@ -19,6 +20,14 @@ function ProtectedRoute({ children }) {
 
 export default function App() {
   const { user } = useAuth()
+
+  // Wake the Render free-tier backend in the background so that by the time
+  // the user fills the login form, the cold start is already over.
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_URL || ''
+    if (!base) return
+    fetch(`${base}/api/health`, { method: 'GET', cache: 'no-store' }).catch(() => {})
+  }, [])
 
   return (
     <div

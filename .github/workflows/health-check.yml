@@ -1,0 +1,34 @@
+name: pedalmind-health-check
+on:
+  schedule:
+    - cron: "*/14 * * * *"  # every 14 min — keeps Render free-tier warm AND verifies it
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Liveness ping (warmup if cold)
+        run: |
+          set -e
+          for i in 1 2 3; do
+            CODE=$(curl -s -o /tmp/r -w '%{http_code}' --max-time 60 https://pedalmind.onrender.com/api/health || echo 000)
+            echo "Attempt $i: HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              cat /tmp/r
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Liveness check failed after 3 attempts"
+          exit 1
+
+      - name: Readiness check (DB ping)
+        run: |
+          curl -fsS --max-time 30 https://pedalmind.onrender.com/api/health/ready
+          echo
+
+      - name: Frontend reachable
+        run: |
+          curl -fsSI --max-time 15 https://pedalmind-web.vercel.app/ | head -1

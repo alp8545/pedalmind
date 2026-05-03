@@ -50,22 +50,28 @@ async def _migrate_schema(conn):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables and migrate schema on startup
+    import asyncio
+
+    # Create tables and migrate schema on startup — bounded so Render boot stays fast
     try:
         from app.core.database import engine
 
-        async with engine.begin() as conn:
-            await _migrate_schema(conn)
+        async with asyncio.timeout(20):
+            async with engine.begin() as conn:
+                await _migrate_schema(conn)
         logger.info("Database tables ready")
     except Exception as exc:
         logger.warning("Could not initialise database tables: %s", exc)
 
-    # Proactive Garmin token refresh — don't block startup if it fails
-    try:
-        from app.core.garth_client import proactive_token_refresh
-        await proactive_token_refresh()
-    except Exception as exc:
-        logger.warning("Garmin token warmup skipped: %s", exc)
+    # Proactive Garmin token refresh — fire-and-forget, never block boot
+    async def _safe_token_refresh():
+        try:
+            from app.core.garth_client import proactive_token_refresh
+            await proactive_token_refresh()
+        except Exception as exc:
+            logger.warning("Garmin token warmup skipped: %s", exc)
+
+    asyncio.create_task(_safe_token_refresh())
 
     yield
 
@@ -114,4 +120,18 @@ app.include_router(ride_records.router, prefix="/api/rides", tags=["ride-records
 
 @app.get("/api/health")
 async def health_check():
+    """Liveness only — used by Render's platform health check. Must stay fast and never depend on DB or Garmin."""
     return {"status": "ok"}
+
+
+@app.get("/api/health/ready")
+async def readiness_check():
+    """Readiness — pings the DB. For external monitoring, NOT for Render's platform health check."""
+    from app.core.database import engine
+    from sqlalchemy import text
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "up"}
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "degraded", "db": str(e)[:120]})

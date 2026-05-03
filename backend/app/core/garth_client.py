@@ -28,8 +28,8 @@ logger = logging.getLogger("garth_client")
 
 # ---- Configuration ----
 MIN_CALL_INTERVAL = 2.0  # seconds between Garmin API calls
-_AUTH_BACKOFF_BASE = 300  # 5 min base backoff
-_AUTH_BACKOFF_MAX = 3600  # 1 hour max backoff
+_AUTH_BACKOFF_BASE = 60   # 1 min base backoff (Render cold-start friendly)
+_AUTH_BACKOFF_MAX = 600   # 10 min max backoff
 _REFRESH_BUFFER_SECS = 300  # refresh 5 min BEFORE expiry
 
 # ---- State (protected by _garmin_lock) ----

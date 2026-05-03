@@ -642,7 +642,7 @@ async def import_bulk_activities(
 
 @router.post("/backfill-metrics")
 async def backfill_second_by_second_metrics(
-    limit: int = 30,
+    limit: int = 10,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -650,7 +650,10 @@ async def backfill_second_by_second_metrics(
 
     Processes the most recent `limit` cycling activities that are missing
     decoupling data. Rate-limited by garmin_api_call (2s between calls).
+    Hard 120s ceiling to stay within Render's request timeout budget.
     """
+    import asyncio
+
     result = await db.execute(
         select(Activity)
         .where(
@@ -668,23 +671,29 @@ async def backfill_second_by_second_metrics(
     processed = 0
     skipped = 0
     errors = []
+    timed_out = False
 
-    for activity in activities:
-        try:
-            await _compute_second_by_second_metrics(activity.id, activity)
-            if activity.decoupling is not None or activity.hr_recovery_30s is not None:
-                processed += 1
-                logger.info(
-                    "Backfill %s: decoupling=%.1f%%, hr_rec_60s=%s",
-                    activity.id,
-                    activity.decoupling or 0,
-                    activity.hr_recovery_60s,
-                )
-            else:
-                skipped += 1
-        except Exception as e:
-            errors.append(f"{activity.id}: {e}")
-            logger.warning("Backfill failed for %s: %s", activity.id, e)
+    try:
+        async with asyncio.timeout(120):
+            for activity in activities:
+                try:
+                    await _compute_second_by_second_metrics(activity.id, activity)
+                    if activity.decoupling is not None or activity.hr_recovery_30s is not None:
+                        processed += 1
+                        logger.info(
+                            "Backfill %s: decoupling=%.1f%%, hr_rec_60s=%s",
+                            activity.id,
+                            activity.decoupling or 0,
+                            activity.hr_recovery_60s,
+                        )
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    errors.append(f"{activity.id}: {e}")
+                    logger.warning("Backfill failed for %s: %s", activity.id, e)
+    except TimeoutError:
+        timed_out = True
+        logger.warning("Backfill hit 120s ceiling at %d/%d", processed + skipped, len(activities))
 
     await db.commit()
 
@@ -692,5 +701,6 @@ async def backfill_second_by_second_metrics(
         "total": len(activities),
         "processed": processed,
         "skipped": skipped,
+        "timed_out": timed_out,
         "errors": errors[:10],
     }

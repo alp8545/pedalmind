@@ -28,9 +28,9 @@ from app.models.database import (
 logger = logging.getLogger(__name__)
 
 # Log API key status at import time
-logger.info("ANTHROPIC_API_KEY: %s (%d chars)",
-            "SET" if settings.ANTHROPIC_API_KEY else "NOT SET",
-            len(settings.ANTHROPIC_API_KEY))
+logger.info("OPENROUTER_API_KEY: %s (%d chars)",
+            "SET" if settings.OPENROUTER_API_KEY else "NOT SET",
+            len(settings.OPENROUTER_API_KEY))
 logger.info("AI_MODEL_CHAT: %s", settings.AI_MODEL_CHAT)
 logger.info("AI_MODEL_ANALYSIS: %s", settings.AI_MODEL_ANALYSIS)
 
@@ -354,7 +354,7 @@ async def send_message(
             recent_rides_with_analysis=rides_14d,
             conversation_history=history,
             model=settings.AI_MODEL_CHAT,
-            api_key=settings.ANTHROPIC_API_KEY,
+            api_key=settings.OPENROUTER_API_KEY,
             latest_activity=latest_act,
             training_load=load,
         )

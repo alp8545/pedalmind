@@ -4,7 +4,7 @@ import os
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///test.db")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 
 from app.services.ride_metrics import compute_decoupling, compute_hr_recovery
 

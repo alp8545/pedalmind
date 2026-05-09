@@ -9,6 +9,18 @@ class Base(DeclarativeBase):
 def gen_uuid() -> str:
     return str(uuid.uuid4())
 
+class GarminTokenStore(Base):
+    """Singleton table that persists the latest garth token bundle.
+
+    Survives container restarts on Render free-tier (where /tmp is wiped).
+    Updated after every successful oauth2 refresh or fresh login.
+    """
+    __tablename__ = "garmin_token_store"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    bundle_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)

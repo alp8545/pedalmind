@@ -272,13 +272,55 @@ async def garmin_api_call(endpoint: str, method: str = "GET", **kwargs):
 
 
 async def proactive_token_refresh():
-    """Attempt token refresh on startup. Non-fatal: logs but doesn't crash the app."""
+    """Attempt token refresh on startup. Non-fatal: logs but doesn't crash the app.
+
+    Restores tokens from DB → /tmp before refreshing, and persists back to
+    DB after a successful refresh so the next container restart has fresh tokens.
+    """
+    from app.core.token_store import load_tokens_from_db_to_disk, save_disk_tokens_to_db
+
+    # Step 1 — restore from DB if /tmp is empty (e.g., fresh container)
+    if not _TOKEN_DIR.exists() or not any(_TOKEN_DIR.iterdir()):
+        await load_tokens_from_db_to_disk()
+
     try:
         async with _garmin_lock:
             await asyncio.to_thread(_ensure_auth)
         logger.info("Proactive token refresh succeeded, client ready")
+        # Step 2 — persist (potentially refreshed) tokens to DB
+        await save_disk_tokens_to_db()
     except Exception as e:
         logger.warning("Proactive token refresh failed (non-fatal): %s", e)
+
+
+async def periodic_token_refresh(interval_seconds: int = 12 * 3600):
+    """Background loop that refreshes the oauth2 token periodically.
+
+    Default cadence: every 12 hours. Each iteration calls _ensure_auth (which
+    refreshes if the access token is within 5 min of expiry) and persists the
+    bundle to the DB. This keeps tokens fresh without external cron.
+    """
+    from app.core.token_store import save_disk_tokens_to_db, days_until_refresh_expires
+
+    # Wait a minute after boot to avoid competing with the startup refresh
+    await asyncio.sleep(60)
+    while True:
+        try:
+            async with _garmin_lock:
+                await asyncio.to_thread(_ensure_auth)
+            await save_disk_tokens_to_db()
+            days_left = days_until_refresh_expires()
+            if days_left is not None and days_left < 7:
+                logger.warning(
+                    "Garmin refresh-token expires in %.1f days — manual re-login soon required",
+                    days_left,
+                )
+            else:
+                logger.info("Periodic Garmin refresh OK (refresh-token: %.1f days left)",
+                            days_left if days_left is not None else -1)
+        except Exception as e:
+            logger.warning("Periodic Garmin refresh failed (non-fatal): %s", e)
+        await asyncio.sleep(interval_seconds)
 
 
 # ---- High-level helpers (all async, all go through garmin_api_call) ----

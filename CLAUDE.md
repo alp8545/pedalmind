@@ -11,7 +11,7 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 - Python typing + Pydantic models everywhere
 - Backend: FastAPI + SQLAlchemy async + PostgreSQL
 - Frontend: React + Tailwind + Recharts
-- AI: Anthropic SDK, Haiku for workout interpretation, Sonnet for chat
+- AI: OpenAI SDK pointed at OpenRouter (Nemotron `nvidia/nemotron-3-super-120b-a12b:free` for both ride analysis and chat). Configured via `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `AI_MODEL_*`
 - Test data in tests/test_data.json (real cycling metrics)
 - Tests: pytest in backend/tests/ (32 tests). Run: `cd backend && python3 -m pytest tests/ -v`
 
@@ -39,8 +39,9 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 - Rate limit: 2s minimum between calls, exponential backoff on 429/timeout/ConnectionError
 - Auth backoff: exponential 5min → 10min → 20min → 1hr max on auth failures
 - Never fallback to fresh login after a failed refresh (causes 429 on second endpoint)
-- Tokens: GARTH_TOKENS env var (base64 bundle) on Render, /tmp/garth_tokens on disk
-- On container restart: tokens must be re-injected via POST /garmin/auth/inject-tokens (requires JWT auth) OR by updating GARTH_TOKENS env in Render dashboard (auto-restarts service)
+- Tokens: GARTH_TOKENS env var (base64 bundle) on Render bootstrap, /tmp/garth_tokens at runtime, **DB `garmin_token_store` table** (singleton row, JSON bundle) for cross-restart persistence
+- Auto-refresh: `proactive_token_refresh()` on startup loads from DB → /tmp → refresh, then writes back to DB. `periodic_token_refresh()` runs every 12h in the lifespan loop. Combined with the 14-min keep-warm cron, the container basically never falls back to a stale env var.
+- Token health endpoints (JWT-auth): `GET /api/garmin/auth/token-health` (status), `POST /api/garmin/auth/refresh` (manual trigger), `POST /api/garmin/auth/inject-tokens` (manual fresh bundle, also persists to DB)
 - Token regen recipe (when sso.garmin.com is 429): use `garth.resume(old_dir) + garth.client.refresh_oauth2()` — connectapi.garmin.com accepts refresh even when SSO is blocked
 - Upload workouts: DB-first architecture. Save to scheduled_workouts table FIRST, then attempt Garmin upload as best-effort. Never crash on Garmin failure.
 - Garmin data sampling: ~25-40s intervals (NOT per-second). A 3h ride has ~277 records.

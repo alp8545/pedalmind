@@ -128,7 +128,7 @@ async def _run_analysis(ride: Ride, user: User, db: AsyncSession) -> dict | None
             athlete_profile=profile_dict,
             recent_rides=recent,
             model=settings.AI_MODEL_ANALYSIS,
-            api_key=settings.ANTHROPIC_API_KEY,
+            api_key=settings.OPENROUTER_API_KEY,
         )
 
         # Delete existing analysis if reanalyzing

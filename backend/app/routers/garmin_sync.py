@@ -25,7 +25,7 @@ from app.core.garth_client import (
     GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
 )
 from app.models.database import Activity, AthleteProfile, User
-from app.services.ride_metrics import compute_decoupling, compute_hr_recovery
+from app.services.ride_metrics import compute_decoupling, compute_hr_recovery, compute_coggan_power_zones
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +115,8 @@ def _safe_int(val) -> int | None:
         return None
 
 
-async def _compute_second_by_second_metrics(activity_id: int, activity: Activity) -> None:
-    """Fetch second-by-second data and compute decoupling + HR recovery.
+async def _compute_second_by_second_metrics(activity_id: int, activity: Activity, ftp: int = DEFAULT_FTP) -> None:
+    """Fetch second-by-second data and compute decoupling + HR recovery + Coggan zones.
 
     Garmin's /details endpoint returns records with flat keys like
     'directPower', 'directHeartRate' (already parsed by ride_records.py).
@@ -186,6 +186,15 @@ async def _compute_second_by_second_metrics(activity_id: int, activity: Activity
         if hr_recovery is not None:
             activity.hr_recovery_30s = hr_recovery.get("drop_30s")
             activity.hr_recovery_60s = hr_recovery.get("drop_60s")
+
+        coggan_zones = compute_coggan_power_zones(records, ftp=ftp,
+                                                   total_duration_secs=activity.duration_secs)
+        if coggan_zones is not None:
+            raw = activity.raw_data if isinstance(activity.raw_data, dict) else {}
+            raw["coggan_power_zones"] = coggan_zones
+            activity.raw_data = raw
+            logger.info("Activity %s: Coggan zones (FTP=%d) %% = %s",
+                        activity_id, ftp, [z["pct"] for z in coggan_zones])
 
         logger.info(
             "Activity %s: decoupling=%s, hr_recovery_30s=%s, hr_recovery_60s=%s",
@@ -271,6 +280,45 @@ async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
     return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
 
 
+@router.get("/auth/token-health")
+async def garmin_token_health(current_user: User = Depends(get_current_user)):
+    """Report current token freshness so the UI/cron can surface re-login warnings."""
+    from app.core.token_store import (
+        seconds_until_access_expires,
+        days_until_refresh_expires,
+    )
+
+    access_secs = seconds_until_access_expires()
+    refresh_days = days_until_refresh_expires()
+    needs_relogin_soon = refresh_days is not None and refresh_days < 7
+
+    return {
+        "access_token_seconds_left": access_secs,
+        "refresh_token_days_left": refresh_days,
+        "needs_relogin_soon": needs_relogin_soon,
+    }
+
+
+@router.post("/auth/refresh")
+async def trigger_garmin_refresh(current_user: User = Depends(get_current_user)):
+    """Manually trigger a Garmin token refresh + DB persist.
+
+    Idempotent. Useful as a cron target (GitHub Actions) and an admin tool.
+    """
+    from app.core.garth_client import proactive_token_refresh
+    from app.core.token_store import (
+        seconds_until_access_expires,
+        days_until_refresh_expires,
+    )
+
+    await proactive_token_refresh()
+    return {
+        "message": "Refresh attempted",
+        "access_token_seconds_left": seconds_until_access_expires(),
+        "refresh_token_days_left": days_until_refresh_expires(),
+    }
+
+
 @router.post("/auth/inject-tokens")
 async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_user)):
     """Inject fresh garth tokens (base64-encoded bundle) into the running server.
@@ -311,11 +359,20 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
         except Exception as e:
             refresh_status = f"refresh_failed: {e}"
 
+    # Persist to DB so the bundle survives container restarts
+    persisted = False
+    try:
+        from app.core.token_store import save_disk_tokens_to_db
+        persisted = await save_disk_tokens_to_db()
+    except Exception as exc:
+        logger.warning("Could not persist injected tokens to DB: %s", exc)
+
     return {
         "message": "Tokens injected and session resumed",
         "access_token_expired": garth.client.oauth2_token.expired,
         "expires_at": garth.client.oauth2_token.expires_at,
         "refresh_status": refresh_status,
+        "persisted_to_db": persisted,
     }
 
 
@@ -363,7 +420,7 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User 
         db.add(activity)
 
         # Compute second-by-second metrics (decoupling, HR recovery)
-        await _compute_second_by_second_metrics(activity_id, activity)
+        await _compute_second_by_second_metrics(activity_id, activity, ftp=constants["ftp"])
 
         await db.commit()
     except Exception as e:
@@ -415,7 +472,7 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db), current
             db.add(activity)
 
             # Compute second-by-second metrics (decoupling, HR recovery)
-            await _compute_second_by_second_metrics(activity_id, activity)
+            await _compute_second_by_second_metrics(activity_id, activity, ftp=constants["ftp"])
 
             synced.append({"activity_id": activity_id, **metrics})
         except Exception as e:
@@ -654,6 +711,7 @@ async def backfill_second_by_second_metrics(
     """
     import asyncio
 
+    constants = await _get_athlete_constants(db, user_id=current_user.id)
     result = await db.execute(
         select(Activity)
         .where(
@@ -677,7 +735,7 @@ async def backfill_second_by_second_metrics(
         async with asyncio.timeout(120):
             for activity in activities:
                 try:
-                    await _compute_second_by_second_metrics(activity.id, activity)
+                    await _compute_second_by_second_metrics(activity.id, activity, ftp=constants["ftp"])
                     if activity.decoupling is not None or activity.hr_recovery_30s is not None:
                         processed += 1
                         logger.info(

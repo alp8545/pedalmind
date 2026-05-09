@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     GARMIN_PASSWORD: str = ""  # Password for garth-based sync (single user)
     GARTH_TOKENS: str = ""  # base64-encoded garth token bundle for Railway
     APP_BASE_URL: str = "http://localhost:8000"
-    ANTHROPIC_API_KEY: str = ""
-    AI_MODEL_ANALYSIS: str = "claude-haiku-4-5-20251001"
-    AI_MODEL_CHAT: str = "claude-sonnet-4-6"
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    AI_MODEL_ANALYSIS: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    AI_MODEL_CHAT: str = "nvidia/nemotron-3-super-120b-a12b:free"
     S3_ENDPOINT: str = ""
     S3_BUCKET: str = "pedalmind-fits"
     S3_ACCESS_KEY: str = ""

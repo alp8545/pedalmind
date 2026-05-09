@@ -1,4 +1,4 @@
-"""Workout interpretation (via Anthropic AI) and upload to Garmin Connect.
+"""Workout interpretation (via OpenRouter AI) and upload to Garmin Connect.
 
 Two endpoints:
   POST /interpret — natural language → structured workout JSON
@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Optional
 
-import anthropic
+from openai import OpenAI, APIError, APIStatusError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -370,27 +370,34 @@ async def _get_interpret_prompt(db: AsyncSession, user_id: str = None) -> str:
 @router.post("/interpret", response_model=WorkoutStructured)
 @limiter.limit("20/minute")
 async def interpret_workout(request: Request, req: WorkoutInterpretRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Use Anthropic Haiku to interpret a natural-language workout description."""
-    if not settings.ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    """Use OpenRouter (Nemotron) to interpret a natural-language workout description."""
+    if not settings.OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
 
     system_prompt = await _get_interpret_prompt(db, user_id=current_user.id)
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = OpenAI(
+        api_key=settings.OPENROUTER_API_KEY,
+        base_url=settings.OPENROUTER_BASE_URL,
+        default_headers={"HTTP-Referer": "https://pedalmind.onrender.com", "X-Title": "PedalMind"},
+    )
 
     user_prompt = f"Interpret this workout: {req.description}\nSport: {req.sport}"
 
     try:
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        message = client.chat.completions.create(
+            model=settings.AI_MODEL_ANALYSIS,
             max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
         )
-    except anthropic.APIError as exc:
-        logger.exception("Anthropic API error during workout interpretation")
+    except (APIError, APIStatusError) as exc:
+        logger.exception("OpenRouter API error during workout interpretation")
         raise HTTPException(status_code=502, detail="AI service temporarily unavailable") from exc
 
-    raw_text = message.content[0].text.strip()
+    raw_text = (message.choices[0].message.content or "").strip()
     # Strip markdown fences if present
     if raw_text.startswith("```"):
         raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]

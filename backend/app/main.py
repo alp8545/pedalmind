@@ -73,6 +73,16 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_safe_token_refresh())
 
+    # Periodic auto-refresh every 12h — keeps oauth2 fresh and persists to DB
+    async def _safe_periodic_refresh():
+        try:
+            from app.core.garth_client import periodic_token_refresh
+            await periodic_token_refresh(interval_seconds=12 * 3600)
+        except Exception as exc:
+            logger.warning("Garmin periodic refresh loop crashed: %s", exc)
+
+    asyncio.create_task(_safe_periodic_refresh())
+
     yield
 
 

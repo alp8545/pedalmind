@@ -17,13 +17,17 @@ function fmtDuration(secs) {
 export default function ActivityDetailPage() {
   const { activityId } = useParams()
   const [activity, setActivity] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [selectedLap, setSelectedLap] = useState(null)
 
   useEffect(() => {
-    api(`/api/garmin/activities/${activityId}`)
-      .then(setActivity)
+    Promise.all([
+      api(`/api/garmin/activities/${activityId}`),
+      api('/api/profile').catch(() => null),
+    ])
+      .then(([act, prof]) => { setActivity(act); setProfile(prof) })
       .catch(err => { console.error(`Failed to load activity ${activityId}:`, err); setError(err.message || 'Failed to load activity') })
       .finally(() => setLoading(false))
   }, [activityId])
@@ -52,17 +56,22 @@ export default function ActivityDetailPage() {
     elevGain: lap.elevationGain ? Math.round(lap.elevationGain) : null,
   }))
 
-  const powerZonesRaw = activity.raw_data?.powerTimeInZones || []
+  // Prefer Coggan zones computed by the backend against the user's FTP.
+  // Fallback to Garmin's own powerTimeInZones (which uses Garmin Connect's
+  // profile-level zone setup, not necessarily Coggan).
+  const cogganZones = activity.raw_data?.coggan_power_zones
+  const powerZonesRaw = cogganZones || activity.raw_data?.powerTimeInZones || []
+  const zonesAreCoggan = !!cogganZones
   const totalZoneSecs = powerZonesRaw.reduce((sum, z) => sum + (z.secsInZone || 0), 0)
   const powerZoneData = powerZonesRaw.map((z, i) => ({
     zone: i + 1,
     label: ZONE_LABELS[i] || `Z${z.zoneNumber}`,
     seconds: z.secsInZone || 0,
-    pct: totalZoneSecs > 0 ? +((z.secsInZone / totalZoneSecs) * 100).toFixed(1) : 0,
-    lowBound: z.zoneLowBoundary || 0,
+    pct: z.pct != null ? z.pct : (totalZoneSecs > 0 ? +((z.secsInZone / totalZoneSecs) * 100).toFixed(1) : 0),
+    lowBound: z.lowBound ?? z.zoneLowBoundary ?? 0,
   }))
 
-  const FTP = 265
+  const FTP = profile?.ftp_watts || 265
   const powerToColor = (w) => {
     if (!w || w === 0) return '#475569'
     const pct = w / FTP
@@ -236,7 +245,7 @@ export default function ActivityDetailPage() {
       {/* Power Zones */}
       {powerZoneData.length > 0 && totalZoneSecs > 0 && (
         <G>
-          <Label>Zone di Potenza</Label>
+          <Label>{zonesAreCoggan ? `Zone di Potenza · Coggan (FTP ${FTP}W)` : 'Zone di Potenza · Garmin'}</Label>
           {powerZoneData.map(z => (
             <ZoneBar key={z.zone} zone={z.zone} pct={z.pct} time={fmtDuration(z.seconds)} color={ZONE_COLORS[z.zone - 1]} />
           ))}

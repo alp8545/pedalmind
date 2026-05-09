@@ -1,4 +1,4 @@
-"""Ride metrics: decoupling and HR recovery.
+"""Ride metrics: decoupling, HR recovery, and Coggan time-in-zone.
 
 Expects records as list[dict] where each dict has at least
 'power' (watts, int|None) and 'heartRate' (bpm, int|None) keys.
@@ -20,6 +20,63 @@ MIN_RECORDS_HR_RECOVERY = 10
 
 # Number of records after peak effort to look for HR recovery
 HR_RECOVERY_WINDOW = 5
+
+# Coggan power zone boundaries as % of FTP. Z1=Recovery, Z7=Neuromuscular.
+COGGAN_ZONE_PCTS = [
+    (0.00, 0.55),  # Z1 Recovery
+    (0.55, 0.75),  # Z2 Endurance
+    (0.75, 0.90),  # Z3 Tempo
+    (0.90, 1.05),  # Z4 Threshold
+    (1.05, 1.20),  # Z5 VO2max
+    (1.20, 1.50),  # Z6 Anaerobic
+    (1.50, 99.0),  # Z7 Neuromuscular
+]
+
+
+def compute_coggan_power_zones(records: list[dict], ftp: int, total_duration_secs: float | None = None) -> list[dict] | None:
+    """Compute time-in-zone using Coggan boundaries against the user's FTP.
+
+    Each record represents one sample. Garmin samples ~every 25-40s, so we
+    weight each record by (total_duration / num_records). Records with no power
+    contribute to Z1 (rest).
+
+    Returns a list of 7 dicts: [{"zoneNumber": 1, "lowBound": int, "secsInZone": int, "pct": float}, ...]
+    or None if not enough data.
+    """
+    if not records or ftp <= 0:
+        return None
+
+    valid = [r for r in records if r.get("power") is not None]
+    if len(valid) < MIN_VALID_RECORDS:
+        return None
+
+    # Per-sample dwell time: total_duration / count (uniform sampling assumption)
+    if total_duration_secs and total_duration_secs > 0:
+        dwell = total_duration_secs / len(valid)
+    else:
+        dwell = 1.0  # raw counts as fallback
+
+    buckets = [0.0] * 7
+    for r in valid:
+        p = r["power"] or 0
+        pct = p / ftp
+        for i, (lo, hi) in enumerate(COGGAN_ZONE_PCTS):
+            if lo <= pct < hi:
+                buckets[i] += dwell
+                break
+        else:
+            buckets[-1] += dwell  # >Z7 cap
+
+    total = sum(buckets) or 1.0
+    return [
+        {
+            "zoneNumber": i + 1,
+            "lowBound": int(ftp * lo),
+            "secsInZone": int(round(buckets[i])),
+            "pct": round(buckets[i] / total * 100, 1),
+        }
+        for i, (lo, _hi) in enumerate(COGGAN_ZONE_PCTS)
+    ]
 
 
 def compute_decoupling(records: list[dict]) -> float | None:

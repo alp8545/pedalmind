@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///test.db")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 
 from app.core.garth_client import (
     _sync_api_call,

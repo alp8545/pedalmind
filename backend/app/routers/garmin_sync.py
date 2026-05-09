@@ -557,6 +557,31 @@ async def get_activity(activity_id: int, db: AsyncSession = Depends(get_db), cur
     }
 
 
+@router.post("/activities/{activity_id}/recompute-metrics")
+async def recompute_metrics(activity_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Force recomputation of decoupling + HR recovery + Coggan zones for one activity.
+
+    Bypasses backfill's filter that skips activities already populated. Useful
+    after the Coggan-zones field was added to refresh existing rides.
+    """
+    result = await db.execute(select(Activity).where(Activity.id == activity_id))
+    activity = result.scalar_one_or_none()
+    if not activity:
+        raise HTTPException(status_code=404, detail="Attivita non trovata")
+
+    constants = await _get_athlete_constants(db, user_id=current_user.id)
+    await _compute_second_by_second_metrics(activity_id, activity, ftp=constants["ftp"])
+    await db.commit()
+    raw = activity.raw_data if isinstance(activity.raw_data, dict) else {}
+    return {
+        "activity_id": activity_id,
+        "decoupling": activity.decoupling,
+        "hr_recovery_30s": activity.hr_recovery_30s,
+        "hr_recovery_60s": activity.hr_recovery_60s,
+        "coggan_power_zones": raw.get("coggan_power_zones"),
+    }
+
+
 @router.post("/activities/{activity_id}/analyze")
 async def analyze_activity(activity_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Generate rule-based analysis for an activity.

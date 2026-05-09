@@ -190,9 +190,9 @@ async def _compute_second_by_second_metrics(activity_id: int, activity: Activity
         coggan_zones = compute_coggan_power_zones(records, ftp=ftp,
                                                    total_duration_secs=activity.duration_secs)
         if coggan_zones is not None:
-            raw = activity.raw_data if isinstance(activity.raw_data, dict) else {}
-            raw["coggan_power_zones"] = coggan_zones
-            activity.raw_data = raw
+            current = activity.raw_data if isinstance(activity.raw_data, dict) else {}
+            # Replace the dict reference so SQLAlchemy detects the JSON mutation
+            activity.raw_data = {**current, "coggan_power_zones": coggan_zones}
             logger.info("Activity %s: Coggan zones (FTP=%d) %% = %s",
                         activity_id, ftp, [z["pct"] for z in coggan_zones])
 

@@ -1,16 +1,31 @@
 import asyncio
 import json
 import logging
+import os
 import traceback
 from datetime import datetime, timezone
 from string import Template
 
-import anthropic
-from anthropic import APIError
+from openai import AsyncOpenAI, APIError, APIStatusError
 
 from ai_engine.prompts import RIDE_ANALYSIS_SYSTEM, RIDE_ANALYSIS_USER, CHAT_SYSTEM, CHAT_CONTEXT_TEMPLATE
 
 logger = logging.getLogger("ai_engine")
+
+# OpenRouter base URL — overridable via OPENROUTER_BASE_URL env var
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+def _make_client(api_key: str) -> AsyncOpenAI:
+    """Build an OpenAI-compatible client pointed at OpenRouter."""
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=OPENROUTER_BASE_URL,
+        default_headers={
+            "HTTP-Referer": "https://pedalmind.onrender.com",
+            "X-Title": "PedalMind",
+        },
+    )
 
 RIDE_TYPES = [
     "endurance", "tempo", "threshold", "vo2max",
@@ -135,7 +150,7 @@ async def analyze_ride(
     ride_data: dict,
     athlete_profile: dict,
     recent_rides: list[dict],
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "nvidia/nemotron-3-super-120b-a12b:free",
     api_key: str = "",
     splits_data: dict | None = None,
     raw_data: dict | None = None,
@@ -143,7 +158,7 @@ async def analyze_ride(
     avg_hr: int | None = None,
     duration_secs: float | None = None,
 ) -> dict:
-    """Call Anthropic API to analyze a ride. Returns a RideAnalysis dict."""
+    """Call OpenRouter (OpenAI-compatible) to analyze a ride. Returns a RideAnalysis dict."""
     logger.info("analyze_ride: starting, model=%s, api_key_set=%s", model, bool(api_key))
 
     ftp = athlete_profile.get("ftp_watts", 265)
@@ -161,16 +176,22 @@ async def analyze_ride(
         cardiac_analysis_json=json.dumps(cardiac, default=str, indent=2),
     )
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    logger.info("analyze_ride: calling Anthropic API...")
+    client = _make_client(api_key)
+    logger.info("analyze_ride: calling OpenRouter (%s)...", model)
     response = await _call_with_retry(
-        client, model=model, max_tokens=3000, system=RIDE_ANALYSIS_SYSTEM,
-        messages=[{"role": "user", "content": user_prompt}],
+        client, model=model, max_tokens=3000,
+        messages=[
+            {"role": "system", "content": RIDE_ANALYSIS_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_format={"type": "json_object"},
     )
-    logger.info("analyze_ride: API response received, tokens in=%d out=%d",
-                 response.usage.input_tokens, response.usage.output_tokens)
+    usage = response.usage
+    in_tok = getattr(usage, "prompt_tokens", 0) or 0
+    out_tok = getattr(usage, "completion_tokens", 0) or 0
+    logger.info("analyze_ride: API response received, tokens in=%d out=%d", in_tok, out_tok)
 
-    raw_text = response.content[0].text
+    raw_text = (response.choices[0].message.content or "").strip()
     # Strip markdown code fences if present
     if raw_text.startswith("```"):
         raw_text = raw_text.split("\n", 1)[1]
@@ -189,8 +210,8 @@ async def analyze_ride(
     analysis["ride_id"] = ride_data.get("ride_id", "")
     analysis["model_used"] = model
     analysis["generated_at"] = datetime.now(timezone.utc).isoformat()
-    analysis["tokens_input"] = response.usage.input_tokens
-    analysis["tokens_output"] = response.usage.output_tokens
+    analysis["tokens_input"] = in_tok
+    analysis["tokens_output"] = out_tok
 
     # Inject pre-computed cardiac data
     if "cardiac_analysis" not in analysis:
@@ -213,12 +234,12 @@ async def chat_response(
     training_summary_30d: str,
     recent_rides_with_analysis: str,
     conversation_history: list[dict],
-    model: str = "claude-sonnet-4-6",
+    model: str = "nvidia/nemotron-3-super-120b-a12b:free",
     api_key: str = "",
     latest_activity: str = "",
     training_load: str = "",
 ) -> tuple[str, int | None]:
-    """Call Anthropic chat API. Returns (response_text, tokens_used)."""
+    """Call OpenRouter chat API (OpenAI-compatible). Returns (response_text, tokens_used)."""
     logger.info("chat_response: starting, model=%s, api_key_set=%s, history_len=%d",
                 model, bool(api_key), len(conversation_history))
 
@@ -230,12 +251,16 @@ async def chat_response(
         training_load=training_load or "Non disponibile.",
     )
 
-    messages: list[dict] = [{"role": "user", "content": context}]
+    messages: list[dict] = [
+        {"role": "system", "content": CHAT_SYSTEM},
+        {"role": "user", "content": context},
+    ]
     for msg in conversation_history:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_message})
 
-    # Merge consecutive same-role messages
+    # Merge consecutive same-role messages (OpenAI-compatible APIs accept it,
+    # but Nemotron prefers strict alternation user/assistant)
     merged: list[dict] = []
     for m in messages:
         if merged and merged[-1]["role"] == m["role"]:
@@ -243,82 +268,84 @@ async def chat_response(
         else:
             merged.append(m)
 
-    logger.info("chat_response: sending %d messages to Anthropic (model=%s)", len(merged), model)
+    logger.info("chat_response: sending %d messages to OpenRouter (model=%s)", len(merged), model)
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = _make_client(api_key)
     response = await _call_with_retry(
-        client, model=model, max_tokens=4096, system=CHAT_SYSTEM, messages=merged
+        client, model=model, max_tokens=4096, messages=merged,
     )
 
-    text = response.content[0].text
-    tokens = response.usage.input_tokens + response.usage.output_tokens
-    logger.info("chat_response: done, tokens=%d, model=%s", tokens, response.model)
+    text = (response.choices[0].message.content or "").strip()
+    usage = response.usage
+    in_tok = getattr(usage, "prompt_tokens", 0) or 0
+    out_tok = getattr(usage, "completion_tokens", 0) or 0
+    tokens = in_tok + out_tok
+    logger.info("chat_response: done, tokens=%d, model=%s", tokens, getattr(response, "model", model))
     return text, tokens
 
 
 RETRY_DELAYS = [2, 5, 10]  # seconds between retries
-FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 
 
-async def _call_with_retry(client, *, model, max_tokens, system, messages):
-    """Call Anthropic with retry on transient errors (529, 500, rate limit).
-    Falls back to Haiku after exhausting retries on the primary model."""
-    last_error = None
+async def _call_with_retry(client, *, model, max_tokens, messages, response_format=None):
+    """Call OpenRouter with retry on transient errors (5xx, 429)."""
+    last_error: Exception | None = None
+    kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": messages}
+    if response_format is not None:
+        kwargs["response_format"] = response_format
 
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
-            response = await client.messages.create(
-                model=model, max_tokens=max_tokens, system=system, messages=messages,
-            )
-            return response
-        except APIError as e:
-            status = getattr(e, 'status_code', None)
+            return await client.chat.completions.create(**kwargs)
+        except APIStatusError as e:
+            status = getattr(e, "status_code", None)
             last_error = e
-            if status in (529, 500, 502, 503):
+            if status in (429, 500, 502, 503, 504, 529):
                 if attempt < len(RETRY_DELAYS):
                     delay = RETRY_DELAYS[attempt]
-                    logger.warning("Anthropic %d on %s, retry %d/%d in %ds",
+                    logger.warning("OpenRouter %s on %s, retry %d/%d in %ds",
                                    status, model, attempt + 1, len(RETRY_DELAYS), delay)
                     await asyncio.sleep(delay)
                     continue
-                # Exhausted retries on primary model — try fallback
-                if model != FALLBACK_MODEL:
-                    logger.warning("Exhausted retries on %s, falling back to %s", model, FALLBACK_MODEL)
-                    try:
-                        response = await client.messages.create(
-                            model=FALLBACK_MODEL, max_tokens=max_tokens, system=system, messages=messages,
-                        )
-                        return response
-                    except APIError as fallback_err:
-                        logger.error("Fallback model %s also failed: %s", FALLBACK_MODEL, fallback_err)
-                        raise fallback_err
-            elif status == 429:
-                # Rate limit — wait longer
-                delay = 10
-                logger.warning("Anthropic 429 rate limit, waiting %ds", delay)
+                logger.error("OpenRouter exhausted retries on %s (status %s)", model, status)
+                raise
+            else:
+                logger.error("OpenRouter non-retryable %s: %s", status, e)
+                raise
+        except APIError as e:
+            last_error = e
+            if attempt < len(RETRY_DELAYS):
+                delay = RETRY_DELAYS[attempt]
+                logger.warning("OpenRouter APIError on %s: %s — retry %d/%d in %ds",
+                               model, e, attempt + 1, len(RETRY_DELAYS), delay)
                 await asyncio.sleep(delay)
                 continue
-            else:
-                logger.error("Anthropic non-retryable error %s: %s", status, e)
-                raise
+            raise
         except Exception as e:
-            logger.error("Unexpected error calling Anthropic: %s\n%s", e, traceback.format_exc())
+            logger.error("Unexpected error calling OpenRouter: %s\n%s", e, traceback.format_exc())
             raise
 
-    raise last_error
+    if last_error:
+        raise last_error
+    raise RuntimeError("OpenRouter call failed without raising")
 
 
 async def test_api_key(api_key: str) -> dict:
-    """Minimal test call to verify API key works."""
+    """Minimal test call to verify the OpenRouter key works."""
     try:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        client = _make_client(api_key)
+        response = await client.chat.completions.create(
+            model="nvidia/nemotron-3-super-120b-a12b:free",
             max_tokens=10,
             messages=[{"role": "user", "content": "Say OK"}],
         )
-        return {"status": "ok", "response": response.content[0].text, "tokens": response.usage.input_tokens + response.usage.output_tokens}
-    except APIError as e:
-        return {"status": "error", "type": type(e).__name__, "status_code": getattr(e, 'status_code', None), "message": str(e)}
+        usage = response.usage
+        return {
+            "status": "ok",
+            "response": response.choices[0].message.content,
+            "tokens": (getattr(usage, "prompt_tokens", 0) or 0) + (getattr(usage, "completion_tokens", 0) or 0),
+        }
+    except APIStatusError as e:
+        return {"status": "error", "type": type(e).__name__, "status_code": getattr(e, "status_code", None), "message": str(e)}
     except Exception as e:
         return {"status": "error", "type": type(e).__name__, "message": str(e)}

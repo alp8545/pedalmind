@@ -17,7 +17,7 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 
 ## Module Boundaries
 - garmin_sync/ → legacy FIT file parsing (unused, garmin_client.py imported by sync.py only)
-- ai_engine/ → ride analysis prompts, chat context builder
+- ai_engine/ → ride analysis prompts, chat context builder. **GOTCHA**: lives at both repo root `ai_engine/` and `backend/ai_engine/` — Docker build context is `backend/` so backend/ai_engine/ is what runs in production. Keep the two copies in sync after every change (or refactor to a single source).
 - backend/ → FastAPI API server, orchestrates everything
   - backend/app/core/garth_client.py → ALL Garmin API calls go through garmin_api_call()
   - backend/app/services/trends.py → CTL/ATL/TSB computation (Coggan EWMA, cycling-only)

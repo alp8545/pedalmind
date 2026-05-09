@@ -1,0 +1,17 @@
+name: render-auto-deploy
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit Render deploy hook
+        run: |
+          curl -fsS --max-time 30 -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}" -o /tmp/r.json
+          echo "Render response:"
+          cat /tmp/r.json
+          echo

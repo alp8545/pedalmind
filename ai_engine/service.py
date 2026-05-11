@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import traceback
 from datetime import datetime, timezone
 from string import Template
@@ -272,16 +273,63 @@ async def chat_response(
 
     client = _make_client(api_key)
     response = await _call_with_retry(
-        client, model=model, max_tokens=4096, messages=merged,
+        client, model=model, max_tokens=8192, messages=merged,
     )
 
-    text = (response.choices[0].message.content or "").strip()
+    raw_text = (response.choices[0].message.content or "").strip()
+    text = _strip_leaked_reasoning(raw_text)
+    if len(raw_text) - len(text) > 100:
+        logger.info("chat_response: stripped %d chars of leaked reasoning", len(raw_text) - len(text))
     usage = response.usage
     in_tok = getattr(usage, "prompt_tokens", 0) or 0
     out_tok = getattr(usage, "completion_tokens", 0) or 0
     tokens = in_tok + out_tok
     logger.info("chat_response: done, tokens=%d, model=%s", tokens, getattr(response, "model", model))
     return text, tokens
+
+
+# Reasoning models (Nemotron etc.) sometimes leak their internal English thinking
+# into the response. Strip explicit tags and, when the answer obviously starts
+# with English meta-commentary, jump to the first Italian section.
+_REASONING_TAG_RE = re.compile(
+    r"<\s*think(?:ing)?\s*>.*?<\s*/\s*think(?:ing)?\s*>", re.DOTALL | re.IGNORECASE,
+)
+_REASONING_PIPE_RE = re.compile(
+    r"<\|reasoning\|>.*?<\|/reasoning\|>", re.DOTALL,
+)
+_ENGLISH_REASONING_START_RE = re.compile(
+    r"^\s*(Okay|Alright|Let(?:'s| me| us)|First[,\s]|Wait|Hmm|So[,\s]|Looking at|"
+    r"The user|I (?:need|will|should|'ll)|Now[,\s]|But (?:wait|the)|Actually)",
+    re.IGNORECASE,
+)
+_ITALIAN_ANSWER_START_RE = re.compile(
+    r"\n\s*(?:#{1,6}\s|---\s*\n|(?:\*\*)?(?:Ciao|Ecco|Allora|La tua|Il tuo|Dai dati|"
+    r"Analisi|Risposta|Per (?:il|la|l'|domani|oggi)|Sulla base|Considera|"
+    r"In (?:sintesi|breve|generale)|Nel complesso|Sì|No[,\s]|Certo|Guarda|"
+    r"Vediamo i dati|Dunque))",
+)
+
+
+def _strip_leaked_reasoning(text: str) -> str:
+    """Remove leaked reasoning blocks from model output.
+
+    Handles two cases:
+    1. Explicit reasoning tags (<think>...</think>, <|reasoning|>...).
+    2. Untagged English meta-commentary at the start, when an Italian section
+       follows it. Conservative: only strips if start clearly matches an
+       English reasoning marker AND a recognisable Italian section exists later.
+    """
+    if not text:
+        return text
+    text = _REASONING_TAG_RE.sub("", text)
+    text = _REASONING_PIPE_RE.sub("", text)
+    text = text.strip()
+
+    if _ENGLISH_REASONING_START_RE.match(text):
+        ita_match = _ITALIAN_ANSWER_START_RE.search(text)
+        if ita_match:
+            text = text[ita_match.start():].lstrip()
+    return text
 
 
 RETRY_DELAYS = [2, 5, 10]  # seconds between retries

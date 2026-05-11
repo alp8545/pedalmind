@@ -187,14 +187,16 @@ def _ensure_auth():
                 except Exception:
                     pass
 
-                # Rate-limited refresh: backoff and wait, don't escalate
+                # Old token is dead too. Whether refresh was 429 or 401, we have
+                # nothing usable — fall through to fresh login as last resort.
+                # Note: sso.garmin.com and connectapi.garmin.com share an
+                # account-level rate limit, so if connectapi is 429 the fresh
+                # login may also fail. That is OK: we will engage backoff once
+                # at the end instead of giving up early with no escape hatch.
                 if _is_rate_limit(refresh_err):
-                    _engage_backoff(f"refresh rate-limited: {refresh_err}")
-                    raise RuntimeError(f"Token refresh rate-limited: {refresh_err}")
-
-                # Non-rate-limit failure (401/403/network): token is dead.
-                # Wipe stale tokens and fall through to fresh login.
-                _bootstrap_log.append("OAuth1 token appears invalid, clearing stale tokens")
+                    _bootstrap_log.append("Refresh rate-limited and old token dead; trying fresh login")
+                else:
+                    _bootstrap_log.append("OAuth1 token appears invalid, clearing stale tokens")
                 for f in _TOKEN_DIR.iterdir():
                     f.unlink()
         else:

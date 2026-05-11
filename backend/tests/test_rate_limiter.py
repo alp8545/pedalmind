@@ -80,8 +80,14 @@ class TestEnsureAuth:
 
     @patch("app.core.garth_client._TOKEN_DIR")
     @patch("app.core.garth_client.garth")
-    def test_rate_limited_refresh_does_not_try_login(self, mock_garth, mock_token_dir):
-        """When refresh fails with 429, should NOT try fresh login (would make it worse)."""
+    def test_rate_limited_refresh_falls_through_to_fresh_login(self, mock_garth, mock_token_dir):
+        """When refresh is 429 AND old token is dead, fresh login is attempted as last resort.
+
+        Previous behavior raised immediately to avoid hammering sso.garmin.com,
+        but that left sync permanently dead while connectapi was 429.
+        Sso may still accept the login even when connectapi is rate-limited.
+        If sso is also 429, fresh login fails and backoff engages once at the end.
+        """
         import app.core.garth_client as gc
 
         mock_token_dir.exists.return_value = True
@@ -94,11 +100,43 @@ class TestEnsureAuth:
         mock_garth.client.refresh_oauth2.side_effect = Exception("429 Too Many Requests")
         mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
 
-        with pytest.raises(RuntimeError, match="rate-limited"):
+        # Fresh login also rate-limited (sso shares the account-level limit).
+        mock_garth.login.side_effect = Exception("429 Too Many Requests")
+
+        gc.settings.GARMIN_EMAIL = "test@test.com"
+        gc.settings.GARMIN_PASSWORD = "pass"
+
+        with pytest.raises(RuntimeError, match="auth failed"):
             _ensure_auth()
 
-        mock_garth.login.assert_not_called()
+        mock_garth.login.assert_called_once()
         assert gc._auth_failure_count == 1
+
+    @patch("app.core.garth_client._TOKEN_DIR")
+    @patch("app.core.garth_client.garth")
+    def test_rate_limited_refresh_recovers_via_fresh_login(self, mock_garth, mock_token_dir):
+        """When refresh is 429 but sso accepts the fresh login, sync recovers."""
+        import app.core.garth_client as gc
+
+        mock_token_dir.exists.return_value = True
+        mock_token_dir.iterdir.return_value = [MagicMock()]
+
+        mock_garth.resume.return_value = None
+        mock_garth.client.oauth2_token = MagicMock(expires_at=0)
+
+        mock_garth.client.refresh_oauth2.side_effect = Exception("429 Too Many Requests")
+        mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
+
+        # Sso accepts the fresh login even though connectapi is 429.
+        mock_garth.login.return_value = None
+        mock_garth.save.return_value = None
+
+        gc.settings.GARMIN_EMAIL = "test@test.com"
+        gc.settings.GARMIN_PASSWORD = "pass"
+
+        _ensure_auth()
+        assert gc._client_ready is True
+        mock_garth.login.assert_called_once()
 
 
 class TestSyncApiCall:

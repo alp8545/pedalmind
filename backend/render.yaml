@@ -36,3 +36,5 @@ services:
         sync: false
       - key: GARTH_TOKENS
         sync: false
+      - key: GARMIN_KEEP_WARM_SECRET
+        sync: false

@@ -295,12 +295,19 @@ async def proactive_token_refresh():
         logger.warning("Proactive token refresh failed (non-fatal): %s", e)
 
 
-async def periodic_token_refresh(interval_seconds: int = 12 * 3600):
+async def periodic_token_refresh(interval_seconds: int = 30 * 60):
     """Background loop that refreshes the oauth2 token periodically.
 
-    Default cadence: every 12 hours. Each iteration calls _ensure_auth (which
-    refreshes if the access token is within 5 min of expiry) and persists the
-    bundle to the DB. This keeps tokens fresh without external cron.
+    Default cadence: every 30 min. Each iteration calls _ensure_auth (which is
+    a no-op if the access token still has more than 5 min left) and persists
+    the bundle to the DB. Cadence chosen to be well below the ~1h access-token
+    TTL so the loop catches expiry even when the container is briefly slow,
+    yet far above Garmin's per-call rate-limit threshold.
+
+    Note: on Render free the container sleeps after 15 min idle, so this loop
+    alone is not enough — it must be paired with the external GitHub Actions
+    cron hitting /api/garmin/auth/keep-warm to guarantee freshness when the
+    user has not opened the app for days.
     """
     from app.core.token_store import save_disk_tokens_to_db, days_until_refresh_expires
 

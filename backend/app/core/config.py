@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     GARMIN_EMAIL: str = ""  # Email for garth-based sync (single user)
     GARMIN_PASSWORD: str = ""  # Password for garth-based sync (single user)
     GARTH_TOKENS: str = ""  # base64-encoded garth token bundle for Railway
+    GARMIN_KEEP_WARM_SECRET: str = ""  # shared secret for /api/garmin/auth/keep-warm cron caller
     APP_BASE_URL: str = "http://localhost:8000"
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"

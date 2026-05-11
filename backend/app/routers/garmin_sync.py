@@ -13,10 +13,11 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.garth_client import (
@@ -296,6 +297,52 @@ async def garmin_token_health(current_user: User = Depends(get_current_user)):
         "access_token_seconds_left": access_secs,
         "refresh_token_days_left": refresh_days,
         "needs_relogin_soon": needs_relogin_soon,
+    }
+
+
+@router.post("/auth/keep-warm")
+async def keep_warm_token(
+    x_keep_warm_secret: str | None = Header(default=None, alias="X-Keep-Warm-Secret"),
+):
+    """Refresh the Garmin token if it's close to expiry.
+
+    Called by an external cron (GitHub Actions) every 30 min so tokens stay
+    fresh even when the user has not opened the app for days. Authenticated
+    via shared secret in `X-Keep-Warm-Secret` header (matches GARMIN_KEEP_WARM_SECRET
+    env var). Conservative: skips the refresh call when the access token still
+    has more than 30 min left, to avoid Garmin rate-limiting us.
+    """
+    from app.core.token_store import (
+        seconds_until_access_expires,
+        days_until_refresh_expires,
+    )
+
+    expected = settings.GARMIN_KEEP_WARM_SECRET
+    if not expected:
+        raise HTTPException(status_code=503, detail="Keep-warm not configured (missing GARMIN_KEEP_WARM_SECRET)")
+    if not x_keep_warm_secret or x_keep_warm_secret != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Keep-Warm-Secret")
+
+    secs_left = seconds_until_access_expires()
+    refresh_days = days_until_refresh_expires()
+
+    refreshed = False
+    error: str | None = None
+    if secs_left is None or secs_left < 1800:  # less than 30 min
+        from app.core.garth_client import proactive_token_refresh
+        try:
+            await proactive_token_refresh()
+            refreshed = True
+        except Exception as exc:
+            error = str(exc)[:200]
+
+    return {
+        "checked": True,
+        "refreshed": refreshed,
+        "access_token_seconds_left_before": secs_left,
+        "access_token_seconds_left_after": seconds_until_access_expires(),
+        "refresh_token_days_left": refresh_days,
+        "error": error,
     }
 
 

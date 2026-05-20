@@ -132,10 +132,10 @@ app.include_router(ride_records.router, prefix="/api/rides", tags=["ride-records
 async def health_check():
     """Liveness only — used by Render's platform health check. Must stay fast and never depend on DB or Garmin.
 
-    Side effect: if the Garmin access token is within 30 min of expiry, fire a
-    background refresh. Strictly fire-and-forget: cannot block, cannot fail
-    the health check. This piggybacks on the existing 14-min keep-warm cron
-    so tokens stay fresh even when the user has not opened the app for days.
+    Side effect: piggybacks on the 14-min cron to keep Garmin tokens warm.
+    Fires a background refresh when tokens are missing (None) OR close to expiry.
+    proactive_token_refresh internally honors auth backoff so this won't hammer Garmin.
+    Strictly fire-and-forget: cannot block, cannot fail the health check.
     """
     import asyncio
     try:
@@ -143,7 +143,8 @@ async def health_check():
         from app.core.garth_client import proactive_token_refresh
 
         secs_left = seconds_until_access_expires()
-        if secs_left is not None and secs_left < 1800:  # less than 30 min
+        # None = no tokens on disk (cold container, wiped /tmp). Also refresh when <30 min left.
+        if secs_left is None or secs_left < 1800:
             asyncio.create_task(proactive_token_refresh())
     except Exception:
         pass  # health must never fail because of this

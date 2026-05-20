@@ -38,10 +38,10 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 - All blocking calls wrapped in `asyncio.to_thread` — never block the event loop
 - Rate limit: 2s minimum between calls, exponential backoff on 429/timeout/ConnectionError
 - Auth backoff: exponential 5min → 10min → 20min → 1hr max on auth failures
-- Never fallback to fresh login after a failed refresh (causes 429 on second endpoint)
+- On 429 refresh: PRESERVE tokens, engage backoff, do NOT fall back to fresh login (sso.garmin.com shares the account-level rate limit). Tokens are only unlinked on truly invalid (401/403) or unreadable. This lets the next backoff cycle retry refresh once Garmin's window opens — the key recovery path.
 - Tokens: GARTH_TOKENS env var (base64 bundle) on Render bootstrap, /tmp/garth_tokens at runtime, **DB `garmin_token_store` table** (singleton row, JSON bundle) for cross-restart persistence
-- Auto-refresh: `proactive_token_refresh()` on startup loads from DB → /tmp → refresh, then writes back to DB. `periodic_token_refresh()` runs every 12h in the lifespan loop. Combined with the 14-min keep-warm cron, the container basically never falls back to a stale env var.
-- Token health endpoints (JWT-auth): `GET /api/garmin/auth/token-health` (status), `POST /api/garmin/auth/refresh` (manual trigger), `POST /api/garmin/auth/inject-tokens` (manual fresh bundle, also persists to DB)
+- Auto-refresh: `proactive_token_refresh()` on startup loads from DB → /tmp → refresh, then writes back to DB. `periodic_token_refresh()` runs every 12h in the lifespan loop. The 14-min `/api/health` cron piggybacks a fire-and-forget `proactive_token_refresh` whenever `seconds_until_access_expires()` is None (cold-start, /tmp wiped) or < 30 min — so the container always heals itself within one cron tick, even when GARTH_TOKENS env var is stale.
+- Token health endpoints (JWT-auth): `GET /api/garmin/auth/token-health` (status), `POST /api/garmin/auth/refresh` (manual trigger), `POST /api/garmin/auth/inject-tokens` (manual fresh bundle, also persists to DB). Public: `GET /api/garmin/auth/status` (sanitized state + last 10 bootstrap-log lines — no JWT needed, safe for cron and uptime monitors).
 - Token regen recipe (when sso.garmin.com is 429): use `garth.resume(old_dir) + garth.client.refresh_oauth2()` — connectapi.garmin.com accepts refresh even when SSO is blocked
 - Upload workouts: DB-first architecture. Save to scheduled_workouts table FIRST, then attempt Garmin upload as best-effort. Never crash on Garmin failure.
 - Garmin data sampling: ~25-40s intervals (NOT per-second). A 3h ride has ~277 records.

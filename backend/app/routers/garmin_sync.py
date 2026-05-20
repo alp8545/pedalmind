@@ -24,6 +24,7 @@ from app.core.garth_client import (
     async_fetch_activities, async_fetch_activity_details,
     garmin_api_call,
     GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
+    get_public_debug,
 )
 from app.models.database import Activity, AthleteProfile, User
 from app.services.ride_metrics import compute_decoupling, compute_hr_recovery, compute_coggan_power_zones
@@ -279,6 +280,16 @@ async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
     """Reset Garmin auth backoff and force re-authentication on next request."""
     reset_auth_backoff()
     return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
+
+
+@router.get("/auth/status")
+async def garmin_auth_status():
+    """Sanitized auth state — public so we can diagnose without JWT.
+
+    Returns no token previews / no env-var content, only timestamps and the last
+    10 bootstrap-log lines. Safe to expose to cron jobs and uptime monitors.
+    """
+    return get_public_debug()
 
 
 @router.get("/auth/token-health")

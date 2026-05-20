@@ -158,50 +158,60 @@ def _ensure_auth():
 
     # Try resume from token dir
     if _TOKEN_DIR.exists() and any(_TOKEN_DIR.iterdir()):
+        resumed_ok = False
         try:
             garth.resume(str(_TOKEN_DIR))
+            resumed_ok = True
             _bootstrap_log.append(f"Resumed garth session from {_TOKEN_DIR}")
         except Exception as e:
             _bootstrap_log.append(f"Resume failed: {e}")
+            # Tokens unreadable — clear them so the next step tries env var / fresh login
+            for f in _TOKEN_DIR.iterdir():
+                f.unlink()
 
-        if _needs_refresh():
-            _bootstrap_log.append("Access token needs refresh")
-            try:
-                garth.client.refresh_oauth2()
-                garth.save(str(_TOKEN_DIR))
-                _auth_failure_count = 0
-                _client_ready = True
-                _bootstrap_log.append("Token refresh succeeded")
-                return
-            except Exception as refresh_err:
-                _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
-                # Check if old token still works (might have generous expiry buffer)
+        if resumed_ok:
+            if _needs_refresh():
+                _bootstrap_log.append("Access token needs refresh")
                 try:
-                    garth.connectapi(
-                        "/activitylist-service/activities/search/activities",
-                        params={"limit": 1},
-                    )
-                    _bootstrap_log.append("Old access token still works despite refresh failure")
+                    garth.client.refresh_oauth2()
+                    garth.save(str(_TOKEN_DIR))
+                    _auth_failure_count = 0
                     _client_ready = True
+                    _bootstrap_log.append("Token refresh succeeded")
                     return
-                except Exception:
-                    pass
+                except Exception as refresh_err:
+                    _bootstrap_log.append(f"Token refresh failed: {refresh_err}")
+                    # Connectapi.garmin.com has a wider grace period than nominal —
+                    # the old access token may still work even after refresh fails.
+                    try:
+                        garth.connectapi(
+                            "/activitylist-service/activities/search/activities",
+                            params={"limit": 1},
+                        )
+                        _bootstrap_log.append("Old access token still works despite refresh failure")
+                        _client_ready = True
+                        return
+                    except Exception:
+                        pass
 
-                # Old token is dead too. Whether refresh was 429 or 401, we have
-                # nothing usable — fall through to fresh login as last resort.
-                # Note: sso.garmin.com and connectapi.garmin.com share an
-                # account-level rate limit, so if connectapi is 429 the fresh
-                # login may also fail. That is OK: we will engage backoff once
-                # at the end instead of giving up early with no escape hatch.
-                if _is_rate_limit(refresh_err):
-                    _bootstrap_log.append("Refresh rate-limited and old token dead; trying fresh login")
-                else:
+                    # On 429: preserve tokens. The next backoff cycle will retry refresh —
+                    # sso.garmin.com fresh-login shares the same account-level rate limit,
+                    # so trying it now just compounds the 429. Engage backoff and bail.
+                    if _is_rate_limit(refresh_err):
+                        _bootstrap_log.append("Refresh rate-limited (429) — preserving tokens, engaging backoff")
+                        _engage_backoff("refresh rate-limited (429)")
+                        raise RuntimeError(
+                            f"Garmin refresh rate-limited. Tokens preserved for retry. "
+                            f"Auth backoff #{_auth_failure_count}."
+                        )
+
+                    # On 401/403 (truly invalid) or other errors: clear and fall through to fresh login
                     _bootstrap_log.append("OAuth1 token appears invalid, clearing stale tokens")
-                for f in _TOKEN_DIR.iterdir():
-                    f.unlink()
-        else:
-            _client_ready = True
-            return
+                    for f in _TOKEN_DIR.iterdir():
+                        f.unlink()
+            else:
+                _client_ready = True
+                return
 
     # No valid tokens — fresh login as last resort
     if _try_fresh_login():
@@ -429,7 +439,7 @@ API_TEST_URL = "/activitylist-service/activities/search/activities"
 
 
 def get_bootstrap_debug() -> dict:
-    """Return debug info about garth token bootstrap."""
+    """Return debug info about garth token bootstrap (full — includes access-token preview)."""
     token_dir_exists = _TOKEN_DIR.exists()
     token_files = sorted(f.name for f in _TOKEN_DIR.iterdir()) if token_dir_exists else []
 
@@ -461,6 +471,44 @@ def get_bootstrap_debug() -> dict:
         "auth_backoff_remaining": max(0, int(_auth_failure_until - time.time())),
         "client_ready": _client_ready,
         "bootstrap_log": list(_bootstrap_log),
+    }
+
+
+def get_public_debug() -> dict:
+    """Sanitized debug info safe to expose without JWT auth.
+
+    No token previews, no env-var lengths — just timing/state so a cron or curl
+    can verify token freshness from outside.
+    """
+    now = int(time.time())
+    access_secs_left = None
+    refresh_days_left = None
+    refresh_token_expired = None
+
+    try:
+        oauth2_path = _TOKEN_DIR / "oauth2_token.json"
+        if oauth2_path.exists():
+            t = json.loads(oauth2_path.read_text())
+            exp = int(t.get("expires_at") or 0)
+            rexp = int(t.get("refresh_token_expires_at") or 0)
+            if exp:
+                access_secs_left = exp - now
+            if rexp:
+                refresh_days_left = round((rexp - now) / 86400.0, 2)
+                refresh_token_expired = rexp < now
+    except Exception:
+        pass
+
+    return {
+        "client_ready": _client_ready,
+        "token_dir_present": _TOKEN_DIR.exists() and any(_TOKEN_DIR.iterdir()),
+        "access_token_seconds_left": access_secs_left,
+        "refresh_token_days_left": refresh_days_left,
+        "refresh_token_expired": refresh_token_expired,
+        "auth_failure_count": _auth_failure_count,
+        "auth_backoff_remaining": max(0, int(_auth_failure_until - now)),
+        # Last 10 log lines so we can see recent state without leaking history
+        "bootstrap_log_tail": list(_bootstrap_log[-10:]),
     }
 
 

@@ -1,4 +1,9 @@
-"""Tests for the Garmin API rate limiter in garth_client.py."""
+"""Tests for the Garmin API rate limiter in garth_client.py.
+
+The refresh state machine lives in token_store.attempt_refresh — those tests
+require an async DB and are exercised in integration. Here we cover only the
+pure-sync pieces: _needs_refresh and _sync_api_call (rate limiting + retries).
+"""
 
 import os
 import time
@@ -10,15 +15,15 @@ os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 
 from app.core.garth_client import (
     _sync_api_call,
-    _ensure_auth,
     _needs_refresh,
     GarminRateLimitError,
+    GarminInBackoffError,
     MIN_CALL_INTERVAL,
 )
 
 
 class TestNeedsRefresh:
-    """Test token expiry detection."""
+    """Token expiry detection."""
 
     def test_returns_true_when_no_token(self):
         import garth
@@ -28,110 +33,56 @@ class TestNeedsRefresh:
         garth.client.oauth2_token = original
 
     def test_returns_true_when_expires_at_is_none(self):
-        """BUG-3 fix: handles None expires_at without crashing."""
         import garth
         original = getattr(garth.client, 'oauth2_token', None)
         mock_token = MagicMock()
         mock_token.expires_at = None
         garth.client.oauth2_token = mock_token
-        assert _needs_refresh() is True  # Should not raise TypeError
+        assert _needs_refresh() is True
+        garth.client.oauth2_token = original
+
+    def test_returns_false_when_token_fresh(self):
+        import garth
+        original = getattr(garth.client, 'oauth2_token', None)
+        mock_token = MagicMock()
+        # Fresh for the next hour (well past the 10-min refresh buffer)
+        mock_token.expires_at = time.time() + 3600
+        garth.client.oauth2_token = mock_token
+        assert _needs_refresh() is False
         garth.client.oauth2_token = original
 
 
-class TestEnsureAuth:
-    """Test the auth flow, especially fallback to fresh login."""
+class TestInBackoffError:
+    """The exception that signals callers to surface a 503 Retry-After."""
 
-    def setup_method(self):
-        import app.core.garth_client as gc
-        gc._client_ready = False
-        gc._auth_failure_until = 0
-        gc._auth_failure_count = 0
-        gc._bootstrap_log.clear()
+    def test_retry_after_seconds_is_set(self):
+        e = GarminInBackoffError(retry_after_seconds=600)
+        assert e.retry_after_seconds == 600
 
-    @patch("app.core.garth_client._TOKEN_DIR")
-    @patch("app.core.garth_client.garth")
-    def test_dead_tokens_fall_through_to_fresh_login(self, mock_garth, mock_token_dir):
-        """When OAuth1 is invalid (non-429 error), should wipe tokens and try fresh login."""
-        import app.core.garth_client as gc
-
-        # Simulate: token dir exists with files
-        mock_token_dir.exists.return_value = True
-        mock_token_dir.iterdir.return_value = [MagicMock()]  # non-empty
-
-        # Resume works, but token needs refresh
-        mock_garth.resume.return_value = None
-        mock_garth.client.oauth2_token = MagicMock(expires_at=0)
-
-        # Refresh fails with 401 (token invalid, NOT rate limited)
-        mock_garth.client.refresh_oauth2.side_effect = Exception("401 Unauthorized")
-        # Old token check also fails
-        mock_garth.connectapi.side_effect = Exception("401 Unauthorized")
-
-        # Fresh login succeeds
-        mock_garth.login.return_value = None
-        mock_garth.save.return_value = None
-
-        gc.settings.GARMIN_EMAIL = "test@test.com"
-        gc.settings.GARMIN_PASSWORD = "pass"
-
-        _ensure_auth()
-        assert gc._client_ready is True
-        mock_garth.login.assert_called_once()
-
-    @patch("app.core.garth_client._TOKEN_DIR")
-    @patch("app.core.garth_client.garth")
-    def test_rate_limited_refresh_preserves_tokens_and_engages_backoff(self, mock_garth, mock_token_dir):
-        """On 429 refresh + 429 connectapi, do NOT delete tokens and do NOT call fresh login.
-
-        sso.garmin.com shares the same account-level rate limit, so trying fresh
-        login on a 429 just compounds the rate-limit clock. Preserving tokens lets
-        the next backoff cycle retry refresh once Garmin's window opens.
-        """
-        import app.core.garth_client as gc
-
-        mock_token_dir.exists.return_value = True
-        token_file = MagicMock()
-        mock_token_dir.iterdir.return_value = [token_file]
-
-        mock_garth.resume.return_value = None
-        mock_garth.client.oauth2_token = MagicMock(expires_at=0)
-        mock_garth.client.refresh_oauth2.side_effect = Exception("429 Too Many Requests")
-        mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
-
-        gc.settings.GARMIN_EMAIL = "test@test.com"
-        gc.settings.GARMIN_PASSWORD = "pass"
-
-        with pytest.raises(RuntimeError, match="rate-limited"):
-            _ensure_auth()
-
-        # Critical assertions: no fresh login, tokens NOT deleted
-        mock_garth.login.assert_not_called()
-        token_file.unlink.assert_not_called()
-        assert gc._auth_failure_count == 1
-        assert gc._auth_failure_until > time.time()
+    def test_clamps_to_min_one(self):
+        e = GarminInBackoffError(retry_after_seconds=0)
+        assert e.retry_after_seconds >= 1
 
 
 class TestSyncApiCall:
-    """Test the rate-limited API call logic."""
+    """Rate-limited API call logic. Auth is assumed to already be ready."""
 
     def setup_method(self):
         import app.core.garth_client as gc
         gc._last_call_time = 0.0
-        gc._client_ready = True  # skip auth for unit tests
+        gc._client_ready = True
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
-    def test_happy_path(self, mock_garth, mock_auth):
+    def test_happy_path(self, mock_garth):
         mock_garth.connectapi.return_value = [{"activityId": 123}]
         result = _sync_api_call("/test-endpoint", params={"limit": 1})
         assert result == [{"activityId": 123}]
         mock_garth.connectapi.assert_called_once_with("/test-endpoint", params={"limit": 1})
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
-    def test_rate_limit_enforces_interval(self, mock_garth, mock_auth):
+    def test_rate_limit_enforces_interval(self, mock_garth):
         import app.core.garth_client as gc
-        gc._last_call_time = time.time()  # pretend we just called
+        gc._last_call_time = time.time()
         mock_garth.connectapi.return_value = "ok"
 
         start = time.time()
@@ -139,10 +90,9 @@ class TestSyncApiCall:
         elapsed = time.time() - start
         assert elapsed >= MIN_CALL_INTERVAL * 0.9
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
     @patch("app.core.garth_client.time.sleep")
-    def test_429_retries(self, mock_sleep, mock_garth, mock_auth):
+    def test_429_retries(self, mock_sleep, mock_garth):
         call_count = 0
         def side_effect(*args, **kwargs):
             nonlocal call_count
@@ -155,19 +105,16 @@ class TestSyncApiCall:
         assert result == "success"
         assert call_count == 2
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
     @patch("app.core.garth_client.time.sleep")
-    def test_three_429s_raises(self, mock_sleep, mock_garth, mock_auth):
+    def test_three_429s_raises(self, mock_sleep, mock_garth):
         mock_garth.connectapi.side_effect = Exception("429 Too Many Requests")
         with pytest.raises(GarminRateLimitError, match="after 3 attempts"):
             _sync_api_call("/test")
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
     @patch("app.core.garth_client.time.sleep")
-    def test_connection_error_retries(self, mock_sleep, mock_garth, mock_auth):
-        """BUG-6 fix: ConnectionError should retry, not crash."""
+    def test_connection_error_retries(self, mock_sleep, mock_garth):
         import requests.exceptions
         call_count = 0
         def side_effect(*args, **kwargs):
@@ -180,9 +127,8 @@ class TestSyncApiCall:
         result = _sync_api_call("/test")
         assert result == "recovered"
 
-    @patch("app.core.garth_client._ensure_auth")
     @patch("app.core.garth_client.garth")
-    def test_non_retryable_error_raises_immediately(self, mock_garth, mock_auth):
+    def test_non_retryable_error_raises_immediately(self, mock_garth):
         mock_garth.connectapi.side_effect = ValueError("unexpected")
         with pytest.raises(ValueError, match="unexpected"):
             _sync_api_call("/test")

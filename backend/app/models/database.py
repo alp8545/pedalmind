@@ -10,15 +10,27 @@ def gen_uuid() -> str:
     return str(uuid.uuid4())
 
 class GarminTokenStore(Base):
-    """Singleton table that persists the latest garth token bundle.
+    """Singleton table that persists the latest garth token bundle PLUS the
+    backoff/rate-limit state machine.
 
-    Survives container restarts on Render free-tier (where /tmp is wiped).
-    Updated after every successful oauth2 refresh or fresh login.
+    Survives container restarts on Render free-tier (where /tmp is wiped AND
+    in-memory backoff state is lost). Storing backoff state here is the only
+    way to prevent each cold-start from triggering a fresh refresh attempt
+    that resets Garmin's account-level 429 timer.
     """
     __tablename__ = "garmin_token_store"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     bundle_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Backoff state — all nullable so _migrate_schema can ALTER TABLE without backfill
+    auth_failure_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    auth_failure_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_refresh_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_refresh_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_in_flight: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    refresh_in_flight_since: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_429_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class User(Base):

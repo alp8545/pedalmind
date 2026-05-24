@@ -63,7 +63,9 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Could not initialise database tables: %s", exc)
 
-    # Proactive Garmin token refresh — fire-and-forget, never block boot
+    # Proactive Garmin token refresh — fire-and-forget, never block boot.
+    # Internally goes through token_store.attempt_refresh which respects the
+    # persistent backoff state, so a cold-start during a Garmin cooldown is a no-op.
     async def _safe_token_refresh():
         try:
             from app.core.garth_client import proactive_token_refresh
@@ -73,15 +75,10 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_safe_token_refresh())
 
-    # Periodic auto-refresh every 12h — keeps oauth2 fresh and persists to DB
-    async def _safe_periodic_refresh():
-        try:
-            from app.core.garth_client import periodic_token_refresh
-            await periodic_token_refresh(interval_seconds=12 * 3600)
-        except Exception as exc:
-            logger.warning("Garmin periodic refresh loop crashed: %s", exc)
-
-    asyncio.create_task(_safe_periodic_refresh())
+    # NOTE: no periodic refresh loop. Render free sleeps the container after
+    # 15 min idle, so a long-interval loop never fires reliably. Refresh is
+    # purely on-demand: triggered by ensure_auth_async() at the first user
+    # request that actually needs Garmin. The chokepoint serializes everything.
 
     yield
 
@@ -130,25 +127,13 @@ app.include_router(ride_records.router, prefix="/api/rides", tags=["ride-records
 
 @app.get("/api/health")
 async def health_check():
-    """Liveness only — used by Render's platform health check. Must stay fast and never depend on DB or Garmin.
+    """Liveness only — used by Render's platform health check AND the 14-min keep-warm cron.
 
-    Side effect: piggybacks on the 14-min cron to keep Garmin tokens warm.
-    Fires a background refresh when tokens are missing (None) OR close to expiry.
-    proactive_token_refresh internally honors auth backoff so this won't hammer Garmin.
-    Strictly fire-and-forget: cannot block, cannot fail the health check.
+    MUST NOT touch Garmin. Hitting Garmin from here is what caused the 2026-05
+    death loop: every cron tick fired a refresh attempt, which re-armed Garmin's
+    account-level 429 timer, perpetuating the block. Token refresh is now
+    exclusively on-demand from `ensure_auth_async()` inside `garmin_api_call`.
     """
-    import asyncio
-    try:
-        from app.core.token_store import seconds_until_access_expires
-        from app.core.garth_client import proactive_token_refresh
-
-        secs_left = seconds_until_access_expires()
-        # None = no tokens on disk (cold container, wiped /tmp). Also refresh when <30 min left.
-        if secs_left is None or secs_left < 1800:
-            asyncio.create_task(proactive_token_refresh())
-    except Exception:
-        pass  # health must never fail because of this
-
     return {"status": "ok"}
 
 

@@ -5,25 +5,20 @@ the garth library, compute training metrics, and store them in the
 activities table. No OAuth required — uses GARMIN_EMAIL/PASSWORD env vars.
 """
 
-import asyncio
 import json
 import logging
-import os
-import traceback
 from datetime import datetime
-from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.garth_client import (
     async_fetch_activities, async_fetch_activity_details,
     garmin_api_call,
-    GarminRateLimitError, API_TEST_URL, reset_auth_backoff,
+    GarminRateLimitError, GarminInBackoffError, reset_auth_backoff,
     get_public_debug,
 )
 from app.models.database import Activity, AthleteProfile, User
@@ -278,7 +273,7 @@ def _generate_analysis(activity: Activity, weight: float = DEFAULT_WEIGHT,
 @router.post("/auth/reset")
 async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
     """Reset Garmin auth backoff and force re-authentication on next request."""
-    reset_auth_backoff()
+    await reset_auth_backoff(reason="manual /auth/reset endpoint")
     return {"message": "Auth backoff reset. Next Garmin request will attempt fresh authentication."}
 
 
@@ -286,10 +281,10 @@ async def reset_garmin_auth(current_user: User = Depends(get_current_user)):
 async def garmin_auth_status():
     """Sanitized auth state — public so we can diagnose without JWT.
 
-    Returns no token previews / no env-var content, only timestamps and the last
-    10 bootstrap-log lines. Safe to expose to cron jobs and uptime monitors.
+    Reads the persistent backoff from DB so the answer is correct even right
+    after a container restart. Safe to expose to cron jobs and uptime monitors.
     """
-    return get_public_debug()
+    return await get_public_debug()
 
 
 @router.get("/auth/token-health")
@@ -311,67 +306,27 @@ async def garmin_token_health(current_user: User = Depends(get_current_user)):
     }
 
 
-@router.post("/auth/keep-warm")
-async def keep_warm_token(
-    x_keep_warm_secret: str | None = Header(default=None, alias="X-Keep-Warm-Secret"),
-):
-    """Refresh the Garmin token if it's close to expiry.
-
-    Called by an external cron (GitHub Actions) every 30 min so tokens stay
-    fresh even when the user has not opened the app for days. Authenticated
-    via shared secret in `X-Keep-Warm-Secret` header (matches GARMIN_KEEP_WARM_SECRET
-    env var). Conservative: skips the refresh call when the access token still
-    has more than 30 min left, to avoid Garmin rate-limiting us.
-    """
-    from app.core.token_store import (
-        seconds_until_access_expires,
-        days_until_refresh_expires,
-    )
-
-    expected = settings.GARMIN_KEEP_WARM_SECRET
-    if not expected:
-        raise HTTPException(status_code=503, detail="Keep-warm not configured (missing GARMIN_KEEP_WARM_SECRET)")
-    if not x_keep_warm_secret or x_keep_warm_secret != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Keep-Warm-Secret")
-
-    secs_left = seconds_until_access_expires()
-    refresh_days = days_until_refresh_expires()
-
-    refreshed = False
-    error: str | None = None
-    if secs_left is None or secs_left < 1800:  # less than 30 min
-        from app.core.garth_client import proactive_token_refresh
-        try:
-            await proactive_token_refresh()
-            refreshed = True
-        except Exception as exc:
-            error = str(exc)[:200]
-
-    return {
-        "checked": True,
-        "refreshed": refreshed,
-        "access_token_seconds_left_before": secs_left,
-        "access_token_seconds_left_after": seconds_until_access_expires(),
-        "refresh_token_days_left": refresh_days,
-        "error": error,
-    }
-
-
 @router.post("/auth/refresh")
-async def trigger_garmin_refresh(current_user: User = Depends(get_current_user)):
-    """Manually trigger a Garmin token refresh + DB persist.
+async def trigger_garmin_refresh(
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """Manually trigger a Garmin token refresh through the chokepoint.
 
-    Idempotent. Useful as a cron target (GitHub Actions) and an admin tool.
+    `force=true` bypasses the persistent backoff (use only when you know
+    Garmin has released the account-level block — wait at least several hours
+    after the last 429 before forcing). `force=false` respects backoff and
+    returns immediately with the current state if a window is still open.
     """
-    from app.core.garth_client import proactive_token_refresh
     from app.core.token_store import (
+        attempt_refresh,
         seconds_until_access_expires,
         days_until_refresh_expires,
     )
 
-    await proactive_token_refresh()
+    result = await attempt_refresh(force=force)
     return {
-        "message": "Refresh attempted",
+        **result,
         "access_token_seconds_left": seconds_until_access_expires(),
         "refresh_token_days_left": days_until_refresh_expires(),
     }
@@ -401,21 +356,12 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
     for fname, content in bundle.items():
         (_TOKEN_DIR / fname).write_text(json.dumps(content))
 
-    reset_auth_backoff()
+    # Clear persistent backoff so the next call doesn't immediately bail.
+    await reset_auth_backoff(reason="manual /auth/inject-tokens")
 
-    # Resume garth with the new tokens
+    # Resume garth with the new tokens (sync — small, OK to do inline)
     import garth
     garth.resume(str(_TOKEN_DIR))
-
-    # Proactively refresh OAuth2 if expired
-    refresh_status = "skipped"
-    if garth.client.oauth2_token.expired:
-        try:
-            garth.client.refresh_oauth2()
-            garth.save(str(_TOKEN_DIR))
-            refresh_status = "refreshed"
-        except Exception as e:
-            refresh_status = f"refresh_failed: {e}"
 
     # Persist to DB so the bundle survives container restarts
     persisted = False
@@ -424,6 +370,14 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
         persisted = await save_disk_tokens_to_db()
     except Exception as exc:
         logger.warning("Could not persist injected tokens to DB: %s", exc)
+
+    # Proactively refresh OAuth2 if expired — through the chokepoint, force=True
+    # so we don't get rejected by our own (just-cleared) backoff.
+    refresh_status = "skipped"
+    if garth.client.oauth2_token.expired:
+        from app.core.token_store import attempt_refresh
+        result = await attempt_refresh(force=True)
+        refresh_status = "refreshed" if result.get("refreshed") else f"refresh_failed: {result.get('error') or result.get('skip_reason')}"
 
     return {
         "message": "Tokens injected and session resumed",
@@ -441,6 +395,15 @@ async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User 
 
     try:
         activities = await async_fetch_activities(days=3, limit=5)
+    except GarminInBackoffError as e:
+        hours = e.retry_after_seconds // 3600
+        mins = (e.retry_after_seconds % 3600) // 60
+        when = f"{hours}h{mins:02d}m" if hours else f"{mins} min"
+        raise HTTPException(
+            status_code=503,
+            detail=f"Garmin sta limitando le richieste di autenticazione. Riprova tra {when}.",
+            headers={"Retry-After": str(e.retry_after_seconds)},
+        )
     except GarminRateLimitError:
         logger.warning("Garmin rate limit on sync/last")
         raise HTTPException(
@@ -496,6 +459,15 @@ async def sync_weeks(weeks: int = 3, db: AsyncSession = Depends(get_db), current
 
     try:
         activities = await async_fetch_activities(days=days, limit=100)
+    except GarminInBackoffError as e:
+        hours = e.retry_after_seconds // 3600
+        mins = (e.retry_after_seconds % 3600) // 60
+        when = f"{hours}h{mins:02d}m" if hours else f"{mins} min"
+        raise HTTPException(
+            status_code=503,
+            detail=f"Garmin sta limitando le richieste di autenticazione. Riprova tra {when}.",
+            headers={"Retry-After": str(e.retry_after_seconds)},
+        )
     except GarminRateLimitError:
         logger.warning("Garmin rate limit on sync/weeks/%d", weeks)
         raise HTTPException(

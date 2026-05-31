@@ -49,6 +49,12 @@ _MIN_INTERVAL_BETWEEN_REFRESHES_SECONDS = 5 * 60
 # the in-flight mutex is treated as stale and the next caller may proceed.
 _IN_FLIGHT_STALE_SECONDS = 5 * 60
 
+# In-process serializer for attempt_refresh: prevents multiple async tasks in the
+# SAME worker from racing past the DB gate. The persistent DB state (in-flight,
+# backoff) plus SELECT...FOR UPDATE handles the cross-worker case; this lock is
+# the cheap belt-and-braces for the common case (single Render free worker).
+_REFRESH_INPROCESS_LOCK = asyncio.Lock()
+
 
 def _backoff_for(failure_count: int) -> int:
     """Return backoff seconds for the Nth consecutive failure (1-indexed)."""
@@ -228,7 +234,15 @@ async def _claim_in_flight(force: bool) -> tuple[bool, dict]:
     """
     now = datetime.utcnow()
     async with async_session_maker() as session:
-        res = await session.execute(select(GarminTokenStore).where(GarminTokenStore.id == 1))
+        # SELECT ... FOR UPDATE serialises across workers/containers: only one
+        # transaction at a time can hold the row, preventing the read-then-write
+        # race that lets multiple refreshes both pass the in_flight=False gate
+        # and fire concurrent refresh_oauth2() calls (the May 2026 8x-429 bug).
+        res = await session.execute(
+            select(GarminTokenStore)
+            .where(GarminTokenStore.id == 1)
+            .with_for_update()
+        )
         row = res.scalar_one_or_none()
 
         if row is None:
@@ -346,54 +360,60 @@ async def attempt_refresh(force: bool = False) -> dict:
     )
     import garth
 
-    claimed, state = await _claim_in_flight(force=force)
-    if not claimed:
-        return {"refreshed": False, **state}
+    # In-process serializer: holds for the WHOLE refresh — claim, network call,
+    # record outcome. Without this, concurrent async tasks in the same worker
+    # could both pass _claim_in_flight (which now uses SELECT FOR UPDATE but
+    # commits between tasks) and fire two refresh_oauth2() calls back-to-back,
+    # both 429-ing and inflating auth_failure_count.
+    async with _REFRESH_INPROCESS_LOCK:
+        claimed, state = await _claim_in_flight(force=force)
+        if not claimed:
+            return {"refreshed": False, **state}
 
-    # Reload fresh state from DB to disk — defeats garth's oauth1_token=None bug
-    await load_tokens_from_db_to_disk()
+        # Reload fresh state from DB to disk — defeats garth's oauth1_token=None bug
+        await load_tokens_from_db_to_disk()
 
-    def _do_refresh() -> tuple[bool, str | None, Exception | None]:
+        def _do_refresh() -> tuple[bool, str | None, Exception | None]:
+            try:
+                garth.resume(str(_TOKEN_DIR))
+                garth.client.refresh_oauth2()
+                return True, None, None
+            except Exception as exc:
+                return False, str(exc)[:500], exc
+
         try:
-            garth.resume(str(_TOKEN_DIR))
-            garth.client.refresh_oauth2()
-            return True, None, None
+            async with _garmin_lock:
+                ok, err_msg, exc = await asyncio.to_thread(_do_refresh)
         except Exception as exc:
-            return False, str(exc)[:500], exc
+            await _record_failure(f"unexpected: {exc}"[:500], is_rate_limit=False,
+                                  current_count=state["auth_failure_count"])
+            return {"refreshed": False, "error": str(exc)[:500]}
 
-    try:
-        async with _garmin_lock:
-            ok, err_msg, exc = await asyncio.to_thread(_do_refresh)
-    except Exception as exc:
-        await _record_failure(f"unexpected: {exc}"[:500], is_rate_limit=False,
-                              current_count=state["auth_failure_count"])
-        return {"refreshed": False, "error": str(exc)[:500]}
+        if ok:
+            try:
+                await save_disk_tokens_to_db()
+            except Exception as save_err:
+                logger.warning("Refresh succeeded but DB persist failed: %s", save_err)
+            await _record_success()
+            return {
+                "refreshed": True,
+                "access_token_seconds_left": seconds_until_access_expires(),
+                "refresh_token_days_left": days_until_refresh_expires(),
+            }
 
-    if ok:
-        try:
-            await save_disk_tokens_to_db()
-        except Exception as save_err:
-            logger.warning("Refresh succeeded but DB persist failed: %s", save_err)
-        await _record_success()
+        # Failure path
+        is_rl = exc is not None and _is_rate_limit(exc)
+        is_invalid = exc is not None and _is_token_invalid(exc)
+        new_count = await _record_failure(
+            reason=err_msg or "unknown error",
+            is_rate_limit=is_rl,
+            current_count=state["auth_failure_count"],
+        )
         return {
-            "refreshed": True,
-            "access_token_seconds_left": seconds_until_access_expires(),
-            "refresh_token_days_left": days_until_refresh_expires(),
+            "refreshed": False,
+            "error": err_msg,
+            "rate_limited": is_rl,
+            "token_invalid": is_invalid,
+            "auth_failure_count": new_count,
+            "auth_failure_until_in_seconds": _backoff_for(new_count),
         }
-
-    # Failure path
-    is_rl = exc is not None and _is_rate_limit(exc)
-    is_invalid = exc is not None and _is_token_invalid(exc)
-    new_count = await _record_failure(
-        reason=err_msg or "unknown error",
-        is_rate_limit=is_rl,
-        current_count=state["auth_failure_count"],
-    )
-    return {
-        "refreshed": False,
-        "error": err_msg,
-        "rate_limited": is_rl,
-        "token_invalid": is_invalid,
-        "auth_failure_count": new_count,
-        "auth_failure_until_in_seconds": _backoff_for(new_count),
-    }

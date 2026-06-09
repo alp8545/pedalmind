@@ -333,35 +333,26 @@ async def async_fetch_activity_details(activity_id: int) -> dict:
     return details
 
 
-def _get_garmin_connect_client():
-    """Get a garminconnect.Garmin client backed by the current garth session.
-
-    Caller must have already awaited `ensure_auth_async()` before invoking this
-    (since this runs inside asyncio.to_thread and cannot itself await).
-    """
-    from garminconnect import Garmin
-    _ensure_resumed_sync()
-    client = Garmin()
-    client.garth = garth.client
-    return client
-
-
 async def async_upload_workout(workout_dict: dict) -> dict:
-    await ensure_auth_async()
-    async with _garmin_lock:
-        def _upload():
-            client = _get_garmin_connect_client()
-            return client.upload_workout(workout_dict)
-        return await asyncio.to_thread(_upload)
+    """Upload a workout to Garmin Connect directly via garth.
+
+    NOTE: do NOT route this through garminconnect.Garmin() — since
+    garminconnect >= 0.2.31 the client no longer uses the garth session
+    (it has its own di_token/jwt_web auth), so assigning `client.garth`
+    silently leaves it unauthenticated ("Not authenticated").
+    """
+    return await garmin_api_call(
+        "/workout-service/workout", method="POST", json=workout_dict
+    )
 
 
 async def async_schedule_workout(workout_id: str, date_str: str):
-    await ensure_auth_async()
-    async with _garmin_lock:
-        def _schedule():
-            client = _get_garmin_connect_client()
-            client.schedule_workout(workout_id, date_str)
-        return await asyncio.to_thread(_schedule)
+    """Schedule an uploaded workout on the Garmin Connect calendar."""
+    return await garmin_api_call(
+        f"/workout-service/schedule/{workout_id}",
+        method="POST",
+        json={"date": date_str},
+    )
 
 
 # ---- Debug and admin ----

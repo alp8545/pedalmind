@@ -38,7 +38,10 @@ _BACKOFF_LADDER_SECONDS = [
     2 * 3600,      # 2 h
     6 * 3600,      # 6 h
     24 * 3600,     # 24 h
-    24 * 3600,     # 24 h (cap)
+    48 * 3600,     # 48 h (cap — at 24h cadence the retries themselves kept
+                   #  re-arming Garmin's account-level block: 11 straight 429s
+                   #  observed June 2026. Primary refresh path is now the
+                   #  local residential-IP refresher, not the server.)
 ]
 
 # Don't refresh again within this window if a previous refresh just succeeded
@@ -98,6 +101,18 @@ async def load_tokens_from_db_to_disk() -> bool:
     except Exception as e:
         logger.warning("load_tokens_from_db_to_disk failed: %s", e)
         return False
+
+
+async def load_bundle_from_db() -> dict | None:
+    """Return the raw token bundle from DB (for /auth/export-tokens)."""
+    try:
+        async with async_session_maker() as session:
+            res = await session.execute(select(GarminTokenStore).where(GarminTokenStore.id == 1))
+            row = res.scalar_one_or_none()
+            return row.bundle_json if row and row.bundle_json else None
+    except Exception as e:
+        logger.warning("load_bundle_from_db failed: %s", e)
+        return None
 
 
 async def save_disk_tokens_to_db() -> bool:

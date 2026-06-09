@@ -388,6 +388,24 @@ async def inject_garth_tokens(payload: dict, current_user=Depends(get_current_us
     }
 
 
+@router.get("/auth/export-tokens")
+async def export_garth_tokens(current_user=Depends(get_current_user)):
+    """Export the current garth token bundle (base64) from the DB.
+
+    Counterpart of /auth/inject-tokens: lets a trusted local machine pull
+    the authoritative bundle, refresh it from a residential IP (Render's
+    datacenter IPs get 429'd by connectapi.garmin.com), and push the
+    refreshed bundle back via /auth/inject-tokens.
+    """
+    import base64
+    from app.core.token_store import load_bundle_from_db
+
+    bundle = await load_bundle_from_db()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="No token bundle in DB")
+    return {"tokens": base64.b64encode(json.dumps(bundle).encode()).decode()}
+
+
 @router.post("/sync/last")
 async def sync_last_ride(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download the latest activity from Garmin and save to DB."""

@@ -38,7 +38,7 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 - All blocking calls wrapped in `asyncio.to_thread` — never block the event loop
 - Rate limit: 2s minimum between calls, exponential backoff on 429/timeout/ConnectionError
 - **Refresh chokepoint**: every Garmin OAuth refresh goes through `token_store.attempt_refresh()`. Module-level globals MUST NOT carry refresh state — Render free wipes them on every cold-start, which would trigger immediate retries and reset Garmin's account-level 429 timer (this caused the May 2026 death loop).
-- **Backoff ladder (persistent, in DB)**: 30 min → 2h → 6h → 24h → 24h. Garmin's account-level block lasts 12-48h, so the ladder MUST be in hours, not minutes. State (`auth_failure_count`, `auth_failure_until`, `refresh_in_flight`, `last_refresh_success_at`) lives in `garmin_token_store` so it survives container restarts.
+- **Backoff ladder (persistent, in DB)**: 30 min → 2h → 6h → 24h → 48h. Garmin's account-level block lasts 12-48h and retrying at 24h cadence re-armed it indefinitely, so the cap is 48h. State (`auth_failure_count`, `auth_failure_until`, `refresh_in_flight`, `last_refresh_success_at`) lives in `garmin_token_store` so it survives container restarts. With the local daily refresher in place the server should almost never need to refresh on its own.
 - On 429 refresh: PRESERVE tokens, engage long backoff, do NOT fall back to fresh login (sso.garmin.com shares the same account-level rate limit). Tokens are only unlinked on truly invalid (401/403) or unreadable.
 - **`/api/health` MUST NOT touch Garmin** — it only returns `{status:ok}`. Hitting Garmin from the 14-min keep-warm cron is what caused the May 2026 death loop.
 - Tokens: GARTH_TOKENS env var (base64 bundle) on Render bootstrap, /tmp/garth_tokens at runtime, **DB `garmin_token_store` table** (singleton row, JSON bundle + backoff state) for cross-restart persistence.
@@ -105,8 +105,8 @@ AI-powered cycling training analytics. Single-user (Alessio), deployed on **Rend
 - After backend restart: inject fresh Garmin tokens via /garmin/auth/inject-tokens or by editing `GARTH_TOKENS` env var in Render (auto-restarts)
 
 ## Learnings & Gotchas
-- Garmin 429 is account-level, not IP-level. Can last hours. Only token refresh via connectapi.garmin.com may work when sso.garmin.com is blocked.
-- garth.client is the HTTP session, NOT the garminconnect API client. For upload_workout/schedule_workout, create a garminconnect.Garmin() instance and assign garth.client to it.
+- Garmin 429 on OAuth refresh is IP-reputation-sensitive: refreshes from Render's datacenter IPs got 11 straight 429s (June 2026) while the identical refresh from a residential IP succeeded first try. **Primary refresh path is the local daily refresher** (`scripts/garmin_local_refresh.py` via systemd user timer `pedalmind-garmin-refresh.timer` on Alessio's machine: export-tokens → refresh locally → inject-tokens). Server-side refresh is only a fallback.
+- **Do NOT route workout upload through garminconnect.Garmin()** — since garminconnect ≥0.2.31 the client no longer uses the garth session (own di_token/jwt_web auth), so assigning `client.garth` leaves it unauthenticated. Upload/schedule go directly through `garmin_api_call("/workout-service/workout", method="POST", json=...)`.
 - Pydantic models with required int fields crash when AI returns null. Always make AI-facing fields Optional with auto-computation fallback.
 - DB pool_pre_ping=True is needed for sleepy containers (Render free-tier sleeps; Neon scales to zero) — connections go stale.
 - Settings class needs `extra = "ignore"` to handle unknown .env vars without crashing.
